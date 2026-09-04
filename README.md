@@ -43,13 +43,23 @@ repeat the work safely.
 
 ## Releases
 
-No pre-built APK release is currently available. The reproducible package
-sources and patches are included in this repository. Do not install packages
-built for a different device, postmarketOS baseline or kernel.
+The first physically tested binary set is available as
+[`v2026.09.04`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.04).
+It contains the cumulative kernel, matching MSM8953 device/udev packages,
+Vince camera policy, OV12A10 IPA tuning and TAS2557 UCM profile. The target is
+Xiaomi Redmi 5 Plus (`vince`), `aarch64`, postmarketOS `v26.06`, Plasma Mobile
+and Linux `7.0.9-msm8953`.
+
+Read the exact compatibility, checksum, manual installation and rollback
+instructions in [`packages/README.md`](packages/README.md) before using the
+APKs. Do not install them on a different device, postmarketOS baseline or
+kernel.
 
 TAS2557 proprietary firmware is not distributed by this project. The public
 repository contains only a local package recipe and instructions for
-extracting the matching file from a legally obtained stock image.
+extracting the matching file from a legally obtained stock image. The released
+UCM package does not make the speaker operational without that separately
+built local firmware package.
 
 ## Licensing
 

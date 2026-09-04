@@ -14,3 +14,8 @@ calibration.
 The tested package depends on exact `libcamera-ipa=99990.7.1-r0`. Recheck and
 rebuild the tuning package when using a different postmarketOS/libcamera
 baseline.
+
+The exact tested APK is included in Release
+[`v2026.09.04`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.04).
+See the [package index](../README.md) for the matching kernel/device set,
+installation and rollback instructions.

@@ -19,3 +19,8 @@ The profile requires the locally built firmware package described in
 [`../firmware-xiaomi-vince-tas2557-local`](../firmware-xiaomi-vince-tas2557-local/README.md).
 The firmware binary is not part of this repository and must not be
 redistributed.
+
+The exact tested UCM APK is included in Release
+[`v2026.09.04`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.04).
+Install it only with the verified local firmware package and the matching
+kernel/device set described in the [package index](../README.md).

@@ -11,3 +11,8 @@ disabled.
 
 The policy passed rear/front Plasma preview and still capture, direct libcamera
 access, lens parking and runtime-suspend checks.
+
+The exact tested APK is included in Release
+[`v2026.09.04`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.04)
+and must be installed with its matching kernel/device set. See the
+[package index](../README.md) for compatibility, installation and rollback.
