@@ -25,6 +25,10 @@ package prevents idle WirePlumber discovery from keeping the linked lens
 powered away from its parked state. Direct libcamera and Plasma Camera access
 remain available.
 
+The adapted mainline DW9768 base and statically recovered DW9763 inputs are
+credited in [`SOURCES.md`](../SOURCES.md#dw9763-lens); the WirePlumber policy
+references are recorded under [IPA and camera policy](../SOURCES.md#ipa-and-camera-policy).
+
 ## Limitations
 
 The values are safe tested bounds, not calibrated near/far endpoints for every

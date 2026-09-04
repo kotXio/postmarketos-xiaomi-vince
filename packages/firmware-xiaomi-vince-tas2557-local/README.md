@@ -4,6 +4,9 @@ The TAS2557 requires board-specific speaker-protection firmware. The aport
 recipe is distributable, but its input `tas2557_uCDSP.bin` and the resulting
 APK are proprietary local artifacts and must not be redistributed.
 
+The stock build, extraction manifest and mirror provenance are recorded in
+[`SOURCES.md`](../../SOURCES.md#tas2557-speaker-and-ucm).
+
 Neither artifact is included in public Release
 [`v2026.09.04`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.04).
 Build and verify this local package before installing the released TAS2557 UCM

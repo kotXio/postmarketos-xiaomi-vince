@@ -15,6 +15,10 @@ suspend. A controlled `pm_test=devices` run reproduced the original failure
 while touch remained responsive. The same guard was then packaged and verified
 across normal persistent boots.
 
+The matched upstream issue and exact RMI4 source files are recorded in
+[`SOURCES.md`](../SOURCES.md#rmi4-touch-guard). The guard itself is
+project-authored rather than copied from another patch.
+
 ## Limitations
 
 The guard does not eliminate the underlying intermittent E700 I2C NACK, repair

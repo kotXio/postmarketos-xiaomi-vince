@@ -34,3 +34,8 @@ V4L2 codec path.
 Do not use `libva-v4l2-request` for this device: that bridge targets stateless
 Request API decoders, while Venus here is a stateful decoder. Do not keep
 `--no-sandbox` as a workaround.
+
+The Linux V4L2, GStreamer, FFmpeg, Chromium, Qt WebEngine and Alpine sources
+used for this investigation are linked from
+[`SOURCES.md`](../SOURCES.md#angelfish-and-hardware-video). No custom browser
+package has been produced yet.

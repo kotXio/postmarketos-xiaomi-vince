@@ -4,6 +4,9 @@ This aport installs the physically verified Xiaomi Redmi 5 Plus (`vince`)
 speaker and microphone profile without modifying the UCM file shared by other
 MSM8953 devices.
 
+Its upstream UCM lineage and local changes are documented in
+[`SOURCES.md`](../../SOURCES.md#tas2557-speaker-and-ucm).
+
 The tested configuration uses:
 
 - TAS2557 Speaker on Quinary MI2S;

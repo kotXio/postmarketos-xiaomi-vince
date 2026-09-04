@@ -36,6 +36,10 @@ Physical testing confirmed responsive pages and smooth YouTube playback from
 the persistent launcher. Smooth playback is a usability result, not evidence of
 hardware video decode: Chromium still reports software-only video decoding.
 
+This workaround came from project A/B testing rather than copied
+configuration. The Qt WebEngine, Mesa and Chromium references are listed in
+[`SOURCES.md`](../SOURCES.md#angelfish-and-hardware-video).
+
 After relaunching Angelfish, verify the running process contains both flags:
 
 ```sh

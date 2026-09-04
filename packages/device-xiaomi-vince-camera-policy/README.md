@@ -9,6 +9,9 @@ The trade-off is intentional: libcamera cameras are not exposed as PipeWire
 camera sources while this policy is installed. Generic V4L2 nodes are not
 disabled.
 
+The official WirePlumber configuration references used by the policy are
+listed in [`SOURCES.md`](../../SOURCES.md#ipa-and-camera-policy).
+
 The policy passed rear/front Plasma preview and still capture, direct libcamera
 access, lens parking and runtime-suspend checks.
 

@@ -29,6 +29,11 @@ sets the Simple IPA black level to `4096`.
 The driver reports a `4096x3072` active crop at `(8,8)` inside the native
 `4112x3088` array and a `270°` rotation.
 
+The stock sensor-library data, Camera SDK layout, downstream DTS evidence and
+mainline structural references used to write the new Linux driver are listed
+in [`SOURCES.md`](../SOURCES.md#ov12a10-rear-camera). No Android kernel driver
+or proprietary blob is redistributed here.
+
 ## Limitations
 
 The tuning contains only the verified black-level correction, not a complete

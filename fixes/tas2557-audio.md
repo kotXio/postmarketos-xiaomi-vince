@@ -23,6 +23,10 @@ incorrectly attributed gain changes to ADC3.
 Physical testing confirmed clean speaker output at the tested level and clean
 Mic2 recordings without the digital noise heard on other routes.
 
+Source commits, the adapted UCM profile, hardware references and private
+firmware provenance are listed in
+[`SOURCES.md`](../SOURCES.md#tas2557-speaker-and-ucm).
+
 ## Reproduce
 
 Apply kernel patches
