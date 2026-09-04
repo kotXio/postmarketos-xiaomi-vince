@@ -1,0 +1,31 @@
+# Release artifacts belong in GitHub Releases, not in Git history.
+*.apk
+*.tar
+*.tar.gz
+*.tgz
+*.zst
+*.zip
+
+# Never publish phone-specific or proprietary binary material from this tree.
+*.bin
+*.img
+*.raw
+*.dump
+*.wav
+*.ppm
+*.pgm
+*.dtb
+*.dtbo
+*.ko
+*.key
+*.pem
+*.p12
+*.pfx
+vmlinuz*
+initramfs*
+
+# Local build output and editor metadata.
+build/
+dist/
+.DS_Store
+._*

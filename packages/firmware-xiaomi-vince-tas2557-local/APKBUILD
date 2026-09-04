@@ -1,0 +1,18 @@
+pkgname=firmware-xiaomi-vince-tas2557-local
+pkgver=11.0.2.0
+pkgrel=0
+pkgdesc="Local stock-derived TAS2557 firmware for Xiaomi vince"
+url="https://gitlab.com/the-muppets/proprietary_vendor_xiaomi"
+arch="noarch"
+license="LicenseRef-Proprietary"
+options="!check !strip !tracedeps"
+source="tas2557_uCDSP.bin"
+
+package() {
+	install -Dm644 "$srcdir/tas2557_uCDSP.bin" \
+		"$pkgdir/usr/lib/firmware/tas2557_uCDSP.bin"
+}
+
+sha512sums="
+a82024742252fcd3c64aa3e93296b1c3f505a360f5e151705f27ad4fc82f064d3dea50d1dc183ad542df01a730989461a2b86e9a37eefd370d897a5858133467  tas2557_uCDSP.bin
+"

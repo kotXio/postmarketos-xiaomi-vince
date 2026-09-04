@@ -1,0 +1,6 @@
+diff --git a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+index c236a35..fc5cd58 100644
+--- a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
++++ b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+@@ -41,0 +42 @@ prepare() {
++	scripts/config --file .config -e PM_DEBUG

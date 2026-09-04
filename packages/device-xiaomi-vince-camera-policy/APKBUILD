@@ -1,0 +1,22 @@
+pkgname=device-xiaomi-vince-camera-policy
+pkgdesc="Camera discovery policy for Xiaomi Redmi 5 Plus (vince)"
+pkgver=1
+pkgrel=0
+url="https://postmarketos.org"
+license="MIT"
+arch="noarch"
+options="!check !archcheck"
+depends="
+	device-qcom-msm8953
+	wireplumber
+"
+source="90-vince-disable-libcamera-monitor.conf"
+
+package() {
+	install -Dm644 "$srcdir"/90-vince-disable-libcamera-monitor.conf \
+		-t "$pkgdir"/usr/share/wireplumber/wireplumber.conf.d
+}
+
+sha512sums="
+eb3da6be2ef795e2d22b0c6916757d9d7772e83a3acfc9e5e67147ba2fdf4bba0679363cd5789dd7f66618e0ee62dd8254cd0fd41877776b62d0ebbe934a4662  90-vince-disable-libcamera-monitor.conf
+"

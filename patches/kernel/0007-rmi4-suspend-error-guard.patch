@@ -1,0 +1,30 @@
+diff --git a/drivers/input/rmi4/rmi_driver.c b/drivers/input/rmi4/rmi_driver.c
+index 083cb56cf867..7821728addfa 100644
+--- a/drivers/input/rmi4/rmi_driver.c
++++ b/drivers/input/rmi4/rmi_driver.c
+@@ -950 +950 @@ int rmi_driver_suspend(struct rmi_device *rmi_dev, bool enable_wake)
+-	if (retval)
++	if (retval) {
+@@ -952,0 +953,2 @@ int rmi_driver_suspend(struct rmi_device *rmi_dev, bool enable_wake)
++		return retval;
++	}
+@@ -955 +957 @@ int rmi_driver_suspend(struct rmi_device *rmi_dev, bool enable_wake)
+-	return retval;
++	return 0;
+@@ -967 +969 @@ int rmi_driver_resume(struct rmi_device *rmi_dev, bool clear_wake)
+-		dev_warn(&rmi_dev->dev, "Failed to suspend functions: %d\n",
++		dev_warn(&rmi_dev->dev, "Failed to resume functions: %d\n",
+diff --git a/drivers/input/rmi4/rmi_i2c.c b/drivers/input/rmi4/rmi_i2c.c
+index beff566ca2c8..22bd3c3bb8e4 100644
+--- a/drivers/input/rmi4/rmi_i2c.c
++++ b/drivers/input/rmi4/rmi_i2c.c
+@@ -320,2 +320,4 @@ static int rmi_i2c_suspend(struct device *dev)
+-	if (ret)
+-		dev_warn(dev, "Failed to resume device: %d\n", ret);
++	if (ret) {
++		dev_warn(dev, "Failed to suspend device: %d\n", ret);
++		return ret;
++	}
+@@ -326 +328 @@ static int rmi_i2c_suspend(struct device *dev)
+-	return ret;
++	return 0;

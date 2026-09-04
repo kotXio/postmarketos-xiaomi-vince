@@ -1,0 +1,602 @@
+From 9bf5001f7a042f03e9726c9b9d9ad0698169589c Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Tue, 1 Sep 2026 16:06:06 +0300
+Subject: [PATCH] media: i2c: add OV12A10 stock modes for vince
+
+---
+ drivers/media/i2c/ov12a10.c | 440 +++++++++++++++++++++++++++++++++---
+ 1 file changed, 404 insertions(+), 36 deletions(-)
+
+diff --git a/drivers/media/i2c/ov12a10.c b/drivers/media/i2c/ov12a10.c
+index 5a8ccdace0b4..8dae253fc2e3 100644
+--- a/drivers/media/i2c/ov12a10.c
++++ b/drivers/media/i2c/ov12a10.c
+@@ -5,7 +5,7 @@
+  * The register tables were statically decoded from Xiaomi's Sunny OV12A10
+  * Camera SDK 2.12.0 sensor library. The original blob is not redistributed.
+  * Blob SHA-256: d4bbeb843107df6f804be995108551b97ac01f2e2cd9f921ce4648ac15e81764
+- * Decoded data SHA-256: bef5d16f71d7b7a3696d732479c573ee58acb87f8857e3ae5e1649992b8fb730
++ * Decoded data SHA-256: 30c5d97ba359cfdcfc7493da6fcc8d9cbd36a869db15cf241c3595773a184f55
+  */
+ 
+ #include <linux/clk.h>
+@@ -35,14 +35,6 @@
+ #define OV12A10_PIXEL_ARRAY_WIDTH	4096
+ #define OV12A10_PIXEL_ARRAY_HEIGHT	3072
+ 
+-#define OV12A10_WIDTH			2048
+-#define OV12A10_HEIGHT			1536
+-/* floor(1064 * 468 MHz / 108 MHz), in external pixel-rate units. */
+-#define OV12A10_HTS			4610
+-#define OV12A10_VTS			3346
+-#define OV12A10_HBLANK			2562
+-#define OV12A10_VTS_MAX		32767
+-
+ #define OV12A10_REG_CHIP_ID		CCI_REG16(0x300b)
+ #define OV12A10_CHIP_ID			0x1241
+ #define OV12A10_REG_MODE_SELECT		CCI_REG8(0x0100)
+@@ -74,6 +66,23 @@
+ #define OV12A10_DOVDD_UV		1800000
+ #define OV12A10_VAF_UV			2850000
+ 
++struct ov12a10_mode {
++	u32 width;
++	u32 height;
++	struct v4l2_rect crop;
++	const struct cci_reg_sequence *regs;
++	unsigned int num_regs;
++	u32 line_length_pclk;
++	u32 vt_pixel_clk;
++	u64 pixel_rate;
++	u32 hts;
++	u32 vts_min;
++	u32 vts_def;
++	u32 vts_max;
++	u32 binning;
++	u32 max_fps_milli;
++};
++
+ struct ov12a10 {
+ 	struct device *dev;
+ 	struct regmap *regmap;
+@@ -94,6 +103,8 @@ struct ov12a10 {
+ 	struct v4l2_ctrl *vblank;
+ 	struct v4l2_ctrl *exposure;
+ 	struct v4l2_ctrl *analogue_gain;
++
++	const struct ov12a10_mode *cur_mode;
+ };
+ 
+ struct ov12a10_power_state {
+@@ -281,6 +292,102 @@ static const struct cci_reg_sequence ov12a10_init_regs[] = {
+ 	{ CCI_REG8(0x520c), 0x0f },
+ };
+ 
++static const struct cci_reg_sequence ov12a10_4096x3072_regs[] = {
++	{ CCI_REG8(0x3642), 0x12 },
++	{ CCI_REG8(0x3666), 0x08 },
++	{ CCI_REG8(0x366b), 0x20 },
++	{ CCI_REG8(0x366c), 0xa4 },
++	{ CCI_REG8(0x366d), 0x20 },
++	{ CCI_REG8(0x366e), 0xa4 },
++	{ CCI_REG8(0x3714), 0x24 },
++	{ CCI_REG8(0x371a), 0x3e },
++	{ CCI_REG8(0x3737), 0x04 },
++	{ CCI_REG8(0x3739), 0x12 },
++	{ CCI_REG8(0x37c2), 0x04 },
++	{ CCI_REG8(0x37d9), 0x0c },
++	{ CCI_REG8(0x37e3), 0x04 },
++	{ CCI_REG8(0x37e4), 0x2a },
++	{ CCI_REG8(0x37e6), 0x04 },
++	{ CCI_REG8(0x3800), 0x00 },
++	{ CCI_REG8(0x3801), 0x00 },
++	{ CCI_REG8(0x3802), 0x00 },
++	{ CCI_REG8(0x3803), 0x00 },
++	{ CCI_REG8(0x3804), 0x10 },
++	{ CCI_REG8(0x3805), 0x0f },
++	{ CCI_REG8(0x3806), 0x0c },
++	{ CCI_REG8(0x3807), 0x0f },
++	{ CCI_REG8(0x3808), 0x10 },
++	{ CCI_REG8(0x3809), 0x00 },
++	{ CCI_REG8(0x380a), 0x0c },
++	{ CCI_REG8(0x380b), 0x00 },
++	{ CCI_REG8(0x380e), 0x0d },
++	{ CCI_REG8(0x380f), 0x12 },
++	{ CCI_REG8(0x3810), 0x00 },
++	{ CCI_REG8(0x3811), 0x0a },
++	{ CCI_REG8(0x3813), 0x08 },
++	{ CCI_REG8(0x3814), 0x01 },
++	{ CCI_REG8(0x3816), 0x01 },
++	{ CCI_REG8(0x3820), 0xa8 },
++	{ CCI_REG8(0x4009), 0x0f },
++	{ CCI_REG8(0x4050), 0x04 },
++	{ CCI_REG8(0x4051), 0x0b },
++	{ CCI_REG8(0x4501), 0x00 },
++	{ CCI_REG8(0x5002), 0x45 },
++	{ CCI_REG8(0x3501), 0xd0 },
++	{ CCI_REG8(0x3502), 0xa0 },
++	{ CCI_REG8(0x3820), 0xa8 },
++	{ CCI_REG8(0x3811), 0x0a },
++	{ CCI_REG8(0x3813), 0x08 },
++};
++
++static const struct cci_reg_sequence ov12a10_4096x2304_regs[] = {
++	{ CCI_REG8(0x3642), 0x12 },
++	{ CCI_REG8(0x3666), 0x08 },
++	{ CCI_REG8(0x366b), 0x20 },
++	{ CCI_REG8(0x366c), 0xa4 },
++	{ CCI_REG8(0x366d), 0x20 },
++	{ CCI_REG8(0x366e), 0xa4 },
++	{ CCI_REG8(0x3714), 0x24 },
++	{ CCI_REG8(0x371a), 0x3e },
++	{ CCI_REG8(0x3737), 0x04 },
++	{ CCI_REG8(0x3739), 0x12 },
++	{ CCI_REG8(0x37c2), 0x04 },
++	{ CCI_REG8(0x37d9), 0x0c },
++	{ CCI_REG8(0x37e3), 0x04 },
++	{ CCI_REG8(0x37e4), 0x2a },
++	{ CCI_REG8(0x37e6), 0x04 },
++	{ CCI_REG8(0x3800), 0x00 },
++	{ CCI_REG8(0x3801), 0x00 },
++	{ CCI_REG8(0x3802), 0x01 },
++	{ CCI_REG8(0x3803), 0x78 },
++	{ CCI_REG8(0x3804), 0x10 },
++	{ CCI_REG8(0x3805), 0x0f },
++	{ CCI_REG8(0x3806), 0x0a },
++	{ CCI_REG8(0x3807), 0x97 },
++	{ CCI_REG8(0x3808), 0x10 },
++	{ CCI_REG8(0x3809), 0x00 },
++	{ CCI_REG8(0x380a), 0x09 },
++	{ CCI_REG8(0x380b), 0x00 },
++	{ CCI_REG8(0x380e), 0x0d },
++	{ CCI_REG8(0x380f), 0x12 },
++	{ CCI_REG8(0x3810), 0x00 },
++	{ CCI_REG8(0x3811), 0x0a },
++	{ CCI_REG8(0x3813), 0x10 },
++	{ CCI_REG8(0x3814), 0x01 },
++	{ CCI_REG8(0x3816), 0x01 },
++	{ CCI_REG8(0x3820), 0xa8 },
++	{ CCI_REG8(0x4009), 0x0f },
++	{ CCI_REG8(0x4050), 0x04 },
++	{ CCI_REG8(0x4051), 0x0b },
++	{ CCI_REG8(0x4501), 0x00 },
++	{ CCI_REG8(0x5002), 0x45 },
++	{ CCI_REG8(0x3501), 0xd0 },
++	{ CCI_REG8(0x3502), 0xa0 },
++	{ CCI_REG8(0x3820), 0xa8 },
++	{ CCI_REG8(0x3811), 0x0a },
++	{ CCI_REG8(0x3813), 0x10 },
++};
++
+ static const struct cci_reg_sequence ov12a10_2048x1536_regs[] = {
+ 	{ CCI_REG8(0x3642), 0x10 },
+ 	{ CCI_REG8(0x3666), 0x08 },
+@@ -329,6 +436,187 @@ static const struct cci_reg_sequence ov12a10_2048x1536_regs[] = {
+ 	{ CCI_REG8(0x3813), 0x04 },
+ };
+ 
++static const struct cci_reg_sequence ov12a10_1920x1080_regs[] = {
++	{ CCI_REG8(0x3642), 0x10 },
++	{ CCI_REG8(0x3666), 0x00 },
++	{ CCI_REG8(0x366b), 0xa4 },
++	{ CCI_REG8(0x366c), 0x20 },
++	{ CCI_REG8(0x366d), 0xa4 },
++	{ CCI_REG8(0x366e), 0x20 },
++	{ CCI_REG8(0x3714), 0x28 },
++	{ CCI_REG8(0x371a), 0x3e },
++	{ CCI_REG8(0x3737), 0x08 },
++	{ CCI_REG8(0x3739), 0x20 },
++	{ CCI_REG8(0x37c2), 0x14 },
++	{ CCI_REG8(0x37d9), 0x0c },
++	{ CCI_REG8(0x37e3), 0x08 },
++	{ CCI_REG8(0x37e4), 0x36 },
++	{ CCI_REG8(0x37e6), 0x08 },
++	{ CCI_REG8(0x3800), 0x00 },
++	{ CCI_REG8(0x3801), 0x00 },
++	{ CCI_REG8(0x3802), 0x02 },
++	{ CCI_REG8(0x3803), 0x48 },
++	{ CCI_REG8(0x3804), 0x0f },
++	{ CCI_REG8(0x3805), 0xff },
++	{ CCI_REG8(0x3806), 0x0a },
++	{ CCI_REG8(0x3807), 0xc7 },
++	{ CCI_REG8(0x3808), 0x07 },
++	{ CCI_REG8(0x3809), 0x80 },
++	{ CCI_REG8(0x380a), 0x04 },
++	{ CCI_REG8(0x380b), 0x38 },
++	{ CCI_REG8(0x380e), 0x04 },
++	{ CCI_REG8(0x380f), 0x68 },
++	{ CCI_REG8(0x3810), 0x00 },
++	{ CCI_REG8(0x3811), 0x44 },
++	{ CCI_REG8(0x3813), 0x04 },
++	{ CCI_REG8(0x3814), 0x03 },
++	{ CCI_REG8(0x3816), 0x03 },
++	{ CCI_REG8(0x3820), 0xab },
++	{ CCI_REG8(0x4009), 0x0d },
++	{ CCI_REG8(0x4050), 0x04 },
++	{ CCI_REG8(0x4051), 0x0b },
++	{ CCI_REG8(0x4501), 0x00 },
++	{ CCI_REG8(0x5002), 0x45 },
++	{ CCI_REG8(0x3501), 0x46 },
++	{ CCI_REG8(0x3502), 0x00 },
++	{ CCI_REG8(0x3820), 0xab },
++	{ CCI_REG8(0x3811), 0x44 },
++	{ CCI_REG8(0x3813), 0x04 },
++};
++
++static const struct cci_reg_sequence ov12a10_1280x720_regs[] = {
++	{ CCI_REG8(0x3642), 0x10 },
++	{ CCI_REG8(0x3666), 0x00 },
++	{ CCI_REG8(0x366b), 0xa4 },
++	{ CCI_REG8(0x366c), 0x20 },
++	{ CCI_REG8(0x366d), 0xa4 },
++	{ CCI_REG8(0x366e), 0x20 },
++	{ CCI_REG8(0x3714), 0x28 },
++	{ CCI_REG8(0x371a), 0x3e },
++	{ CCI_REG8(0x3737), 0x08 },
++	{ CCI_REG8(0x3739), 0x20 },
++	{ CCI_REG8(0x37c2), 0x14 },
++	{ CCI_REG8(0x37d9), 0x0c },
++	{ CCI_REG8(0x37e3), 0x08 },
++	{ CCI_REG8(0x37e4), 0x36 },
++	{ CCI_REG8(0x37e6), 0x08 },
++	{ CCI_REG8(0x3800), 0x00 },
++	{ CCI_REG8(0x3801), 0x00 },
++	{ CCI_REG8(0x3802), 0x03 },
++	{ CCI_REG8(0x3803), 0x68 },
++	{ CCI_REG8(0x3804), 0x0f },
++	{ CCI_REG8(0x3805), 0xff },
++	{ CCI_REG8(0x3806), 0x09 },
++	{ CCI_REG8(0x3807), 0x27 },
++	{ CCI_REG8(0x3808), 0x05 },
++	{ CCI_REG8(0x3809), 0x00 },
++	{ CCI_REG8(0x380a), 0x02 },
++	{ CCI_REG8(0x380b), 0xd0 },
++	{ CCI_REG8(0x380e), 0x03 },
++	{ CCI_REG8(0x380f), 0x4c },
++	{ CCI_REG8(0x3810), 0x01 },
++	{ CCI_REG8(0x3811), 0x84 },
++	{ CCI_REG8(0x3813), 0x08 },
++	{ CCI_REG8(0x3814), 0x03 },
++	{ CCI_REG8(0x3816), 0x03 },
++	{ CCI_REG8(0x3820), 0xab },
++	{ CCI_REG8(0x4009), 0x0d },
++	{ CCI_REG8(0x4050), 0x04 },
++	{ CCI_REG8(0x4051), 0x0b },
++	{ CCI_REG8(0x4501), 0x00 },
++	{ CCI_REG8(0x5002), 0x45 },
++	{ CCI_REG8(0x3501), 0x34 },
++	{ CCI_REG8(0x3502), 0x40 },
++	{ CCI_REG8(0x3820), 0xab },
++	{ CCI_REG8(0x3811), 0x84 },
++	{ CCI_REG8(0x3813), 0x08 },
++};
++
++static const struct ov12a10_mode ov12a10_modes[] = {
++	{
++		.width = 4096,
++		.height = 3072,
++		.crop = { 8, 8, 4096, 3072 },
++		.regs = ov12a10_4096x3072_regs,
++		.num_regs = ARRAY_SIZE(ov12a10_4096x3072_regs),
++		.line_length_pclk = 1064,
++		.vt_pixel_clk = 108000000,
++		.pixel_rate = OV12A10_PIXEL_RATE,
++		.hts = 4610,
++		.vts_min = 3346,
++		.vts_def = 3346,
++		.vts_max = 13533,
++		.binning = 1,
++		.max_fps_milli = 30300,
++	},
++	{
++		.width = 4096,
++		.height = 2304,
++		.crop = { 8, 392, 4096, 2304 },
++		.regs = ov12a10_4096x2304_regs,
++		.num_regs = ARRAY_SIZE(ov12a10_4096x2304_regs),
++		.line_length_pclk = 1064,
++		.vt_pixel_clk = 108000000,
++		.pixel_rate = OV12A10_PIXEL_RATE,
++		.hts = 4610,
++		.vts_min = 3346,
++		.vts_def = 3346,
++		.vts_max = 13533,
++		.binning = 1,
++		.max_fps_milli = 30300,
++	},
++	{
++		.width = 2048,
++		.height = 1536,
++		.crop = { 8, 8, 4096, 3072 },
++		.regs = ov12a10_2048x1536_regs,
++		.num_regs = ARRAY_SIZE(ov12a10_2048x1536_regs),
++		.line_length_pclk = 1064,
++		.vt_pixel_clk = 108000000,
++		.pixel_rate = OV12A10_PIXEL_RATE,
++		.hts = 4610,
++		.vts_min = 1690,
++		.vts_def = 3346,
++		.vts_max = 13533,
++		.binning = 2,
++		.max_fps_milli = 60000,
++	},
++	{
++		.width = 1920,
++		.height = 1080,
++		.crop = { 136, 464, 3840, 2160 },
++		.regs = ov12a10_1920x1080_regs,
++		.num_regs = ARRAY_SIZE(ov12a10_1920x1080_regs),
++		.line_length_pclk = 1064,
++		.vt_pixel_clk = 108000000,
++		.pixel_rate = OV12A10_PIXEL_RATE,
++		.hts = 4610,
++		.vts_min = 1128,
++		.vts_def = 3383,
++		.vts_max = 13533,
++		.binning = 2,
++		.max_fps_milli = 90000,
++	},
++	{
++		.width = 1280,
++		.height = 720,
++		.crop = { 776, 824, 2560, 1440 },
++		.regs = ov12a10_1280x720_regs,
++		.num_regs = ARRAY_SIZE(ov12a10_1280x720_regs),
++		.line_length_pclk = 1064,
++		.vt_pixel_clk = 107800000,
++		.pixel_rate = OV12A10_PIXEL_RATE,
++		.hts = 4619,
++		.vts_min = 844,
++		.vts_def = 3377,
++		.vts_max = 13508,
++		.binning = 2,
++		.max_fps_milli = 120000,
++	},
++};
++
++#define OV12A10_DEFAULT_MODE	2
++
+ static int ov12a10_release_group_hold(struct ov12a10 *ov12a10)
+ {
+ 	int first_error = 0;
+@@ -355,7 +643,7 @@ static int ov12a10_write_exposure_group(struct ov12a10 *ov12a10)
+ 	/* This is the exact grouped order proved by the vendor callback. */
+ 	cci_write(ov12a10->regmap, CCI_REG8(0x3208), 0x00, &ret);
+ 	cci_write(ov12a10->regmap, CCI_REG16(0x380e),
+-		  OV12A10_HEIGHT + ov12a10->vblank->val, &ret);
++		  ov12a10->cur_mode->height + ov12a10->vblank->val, &ret);
+ 	cci_write(ov12a10->regmap, CCI_REG24(0x3500),
+ 		  ov12a10->exposure->val << 4, &ret);
+ 	cci_write(ov12a10->regmap, CCI_REG16(0x3508),
+@@ -371,15 +659,19 @@ static int ov12a10_set_ctrl(struct v4l2_ctrl *ctrl)
+ {
+ 	struct ov12a10 *ov12a10 =
+ 		container_of(ctrl->handler, struct ov12a10, ctrl_handler);
++	s64 exposure_max;
+ 	int ret;
+ 
+-	if (ctrl->id == V4L2_CID_VBLANK)
++	if (ctrl->id == V4L2_CID_VBLANK) {
++		exposure_max = ov12a10->cur_mode->height + ctrl->val -
++			       OV12A10_EXPOSURE_MARGIN;
+ 		__v4l2_ctrl_modify_range(ov12a10->exposure,
+ 					 ov12a10->exposure->minimum,
+-					 OV12A10_HEIGHT + ctrl->val -
+-					 OV12A10_EXPOSURE_MARGIN,
++					 exposure_max,
+ 					 ov12a10->exposure->step,
+-					 ov12a10->exposure->default_value);
++					 min_t(s64, OV12A10_EXPOSURE_DEFAULT,
++					       exposure_max));
++	}
+ 
+ 	if (!pm_runtime_get_if_active(ov12a10->dev))
+ 		return 0;
+@@ -390,6 +682,11 @@ static int ov12a10_set_ctrl(struct v4l2_ctrl *ctrl)
+ 	case V4L2_CID_ANALOGUE_GAIN:
+ 		ret = ov12a10_write_exposure_group(ov12a10);
+ 		break;
++	case V4L2_CID_HBLANK:
++	case V4L2_CID_LINK_FREQ:
++	case V4L2_CID_PIXEL_RATE:
++		ret = 0;
++		break;
+ 	default:
+ 		ret = -EINVAL;
+ 		break;
+@@ -408,6 +705,9 @@ static int ov12a10_init_controls(struct ov12a10 *ov12a10)
+ {
+ 	struct v4l2_ctrl_handler *handler = &ov12a10->ctrl_handler;
+ 	struct v4l2_fwnode_device_properties props;
++	const struct ov12a10_mode *mode = ov12a10->cur_mode;
++	u32 hblank = mode->hts - mode->width;
++	u32 vblank_def = mode->vts_def - mode->height;
+ 	int ret;
+ 
+ 	v4l2_ctrl_handler_init(handler, 8);
+@@ -429,21 +729,20 @@ static int ov12a10_init_controls(struct ov12a10 *ov12a10)
+ 
+ 	ov12a10->hblank =
+ 		v4l2_ctrl_new_std(handler, &ov12a10_ctrl_ops, V4L2_CID_HBLANK,
+-				  OV12A10_HBLANK, OV12A10_HBLANK, 1,
+-				  OV12A10_HBLANK);
++				  hblank, hblank, 1, hblank);
+ 	if (ov12a10->hblank)
+ 		ov12a10->hblank->flags |= V4L2_CTRL_FLAG_READ_ONLY;
+ 
+ 	ov12a10->vblank =
+ 		v4l2_ctrl_new_std(handler, &ov12a10_ctrl_ops, V4L2_CID_VBLANK,
+-				  OV12A10_VTS - OV12A10_HEIGHT,
+-				  OV12A10_VTS_MAX - OV12A10_HEIGHT, 1,
+-				  OV12A10_VTS - OV12A10_HEIGHT);
++				  mode->vts_min - mode->height,
++				  mode->vts_max - mode->height, 1,
++				  vblank_def);
+ 
+ 	ov12a10->exposure =
+ 		v4l2_ctrl_new_std(handler, &ov12a10_ctrl_ops, V4L2_CID_EXPOSURE,
+ 				  OV12A10_EXPOSURE_MIN,
+-				  OV12A10_VTS - OV12A10_EXPOSURE_MARGIN,
++				  mode->vts_def - OV12A10_EXPOSURE_MARGIN,
+ 				  OV12A10_EXPOSURE_STEP,
+ 				  OV12A10_EXPOSURE_DEFAULT);
+ 
+@@ -478,10 +777,51 @@ static int ov12a10_init_controls(struct ov12a10 *ov12a10)
+ 	return ret;
+ }
+ 
+-static void ov12a10_update_pad_format(struct v4l2_mbus_framefmt *format)
++static int ov12a10_update_controls(struct ov12a10 *ov12a10,
++				   const struct ov12a10_mode *mode)
+ {
+-	format->width = OV12A10_WIDTH;
+-	format->height = OV12A10_HEIGHT;
++	u32 hblank = mode->hts - mode->width;
++	u32 vblank_def = mode->vts_def - mode->height;
++	int ret;
++
++	ret = __v4l2_ctrl_modify_range(ov12a10->hblank, hblank, hblank, 1,
++				       hblank);
++	if (ret)
++		return ret;
++
++	ret = __v4l2_ctrl_modify_range(ov12a10->vblank,
++				       mode->vts_min - mode->height,
++				       mode->vts_max - mode->height, 1,
++				       vblank_def);
++	if (ret)
++		return ret;
++
++	ret = __v4l2_ctrl_s_ctrl(ov12a10->vblank, vblank_def);
++	if (ret)
++		return ret;
++
++	ret = __v4l2_ctrl_s_ctrl(ov12a10->link_freq, 0);
++	if (ret)
++		return ret;
++
++	return __v4l2_ctrl_s_ctrl_int64(ov12a10->pixel_rate,
++					 mode->pixel_rate);
++}
++
++static const struct ov12a10_mode *
++ov12a10_find_mode(const struct v4l2_mbus_framefmt *format)
++{
++	return v4l2_find_nearest_size(ov12a10_modes,
++				      ARRAY_SIZE(ov12a10_modes),
++				      width, height,
++				      format->width, format->height);
++}
++
++static void ov12a10_update_pad_format(const struct ov12a10_mode *mode,
++				      struct v4l2_mbus_framefmt *format)
++{
++	format->width = mode->width;
++	format->height = mode->height;
+ 	format->code = MEDIA_BUS_FMT_SBGGR10_1X10;
+ 	format->field = V4L2_FIELD_NONE;
+ 	format->colorspace = V4L2_COLORSPACE_RAW;
+@@ -494,8 +834,25 @@ static int ov12a10_set_pad_format(struct v4l2_subdev *sd,
+ 				  struct v4l2_subdev_state *state,
+ 				  struct v4l2_subdev_format *format)
+ {
+-	ov12a10_update_pad_format(&format->format);
++	struct ov12a10 *ov12a10 = to_ov12a10(sd);
++	const struct ov12a10_mode *mode;
++	struct v4l2_rect *crop;
++
++	mode = ov12a10_find_mode(&format->format);
++
++	if (format->which == V4L2_SUBDEV_FORMAT_ACTIVE &&
++	    v4l2_subdev_is_streaming(sd))
++		return -EBUSY;
++
++	ov12a10_update_pad_format(mode, &format->format);
+ 	*v4l2_subdev_state_get_format(state, format->pad) = format->format;
++	crop = v4l2_subdev_state_get_crop(state, format->pad);
++	*crop = mode->crop;
++
++	if (format->which == V4L2_SUBDEV_FORMAT_ACTIVE) {
++		ov12a10->cur_mode = mode;
++		return ov12a10_update_controls(ov12a10, mode);
++	}
+ 
+ 	return 0;
+ }
+@@ -516,13 +873,14 @@ static int ov12a10_enum_frame_size(struct v4l2_subdev *sd,
+ 				   struct v4l2_subdev_state *state,
+ 				   struct v4l2_subdev_frame_size_enum *fse)
+ {
+-	if (fse->index || fse->code != MEDIA_BUS_FMT_SBGGR10_1X10)
++	if (fse->index >= ARRAY_SIZE(ov12a10_modes) ||
++	    fse->code != MEDIA_BUS_FMT_SBGGR10_1X10)
+ 		return -EINVAL;
+ 
+-	fse->min_width = OV12A10_WIDTH;
+-	fse->max_width = OV12A10_WIDTH;
+-	fse->min_height = OV12A10_HEIGHT;
+-	fse->max_height = OV12A10_HEIGHT;
++	fse->min_width = ov12a10_modes[fse->index].width;
++	fse->max_width = fse->min_width;
++	fse->min_height = ov12a10_modes[fse->index].height;
++	fse->max_height = fse->min_height;
+ 
+ 	return 0;
+ }
+@@ -556,13 +914,13 @@ static int ov12a10_get_selection(struct v4l2_subdev *sd,
+ static int ov12a10_init_state(struct v4l2_subdev *sd,
+ 			      struct v4l2_subdev_state *state)
+ {
++	const struct ov12a10_mode *mode =
++		&ov12a10_modes[OV12A10_DEFAULT_MODE];
+ 	struct v4l2_rect *crop = v4l2_subdev_state_get_crop(state, 0);
+ 
+-	ov12a10_update_pad_format(v4l2_subdev_state_get_format(state, 0));
+-	crop->left = OV12A10_PIXEL_ARRAY_LEFT;
+-	crop->top = OV12A10_PIXEL_ARRAY_TOP;
+-	crop->width = OV12A10_PIXEL_ARRAY_WIDTH;
+-	crop->height = OV12A10_PIXEL_ARRAY_HEIGHT;
++	ov12a10_update_pad_format(mode,
++				  v4l2_subdev_state_get_format(state, 0));
++	*crop = mode->crop;
+ 
+ 	return 0;
+ }
+@@ -572,16 +930,24 @@ static int ov12a10_enable_streams(struct v4l2_subdev *sd,
+ 				  u64 streams_mask)
+ {
+ 	struct ov12a10 *ov12a10 = to_ov12a10(sd);
++	const struct v4l2_mbus_framefmt *format;
++	const struct ov12a10_mode *mode;
+ 	int ret = 0;
+ 
++	format = v4l2_subdev_state_get_format(state, pad);
++	mode = ov12a10_find_mode(format);
++	if (mode != ov12a10->cur_mode || mode->width != format->width ||
++	    mode->height != format->height)
++		return -EINVAL;
++
+ 	ret = pm_runtime_resume_and_get(ov12a10->dev);
+ 	if (ret)
+ 		return ret;
+ 
+ 	cci_multi_reg_write(ov12a10->regmap, ov12a10_init_regs,
+ 			    ARRAY_SIZE(ov12a10_init_regs), &ret);
+-	cci_multi_reg_write(ov12a10->regmap, ov12a10_2048x1536_regs,
+-			    ARRAY_SIZE(ov12a10_2048x1536_regs), &ret);
++	cci_multi_reg_write(ov12a10->regmap, mode->regs, mode->num_regs,
++			    &ret);
+ 	if (ret)
+ 		goto error;
+ 
+@@ -939,6 +1305,8 @@ static int ov12a10_probe(struct i2c_client *client)
+ 	if (ret)
+ 		goto power_off;
+ 
++	ov12a10->cur_mode = &ov12a10_modes[OV12A10_DEFAULT_MODE];
++
+ 	ret = ov12a10_init_controls(ov12a10);
+ 	if (ret)
+ 		goto power_off;
+-- 
+2.43.0

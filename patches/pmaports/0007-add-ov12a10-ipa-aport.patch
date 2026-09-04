@@ -1,0 +1,57 @@
+From a6f38ebf5b6c93b3d8dbb2ca22c44628355d14bd Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Wed, 2 Sep 2026 13:25:40 +0300
+Subject: [PATCH] libcamera-ipa: package OV12A10 Simple tuning
+
+---
+ .../libcamera-ipa-ov12a10/APKBUILD                    | 20 ++++++++++++++++++++
+ .../libcamera-ipa-ov12a10/ov12a10.yaml                | 11 +++++++++++
+ 2 files changed, 31 insertions(+)
+ create mode 100644 device/community/libcamera-ipa-ov12a10/APKBUILD
+ create mode 100644 device/community/libcamera-ipa-ov12a10/ov12a10.yaml
+
+diff --git a/device/community/libcamera-ipa-ov12a10/APKBUILD b/device/community/libcamera-ipa-ov12a10/APKBUILD
+new file mode 100644
+index 0000000..32653f5
+--- /dev/null
++++ b/device/community/libcamera-ipa-ov12a10/APKBUILD
+@@ -0,0 +1,20 @@
++maintainer="Kostiantyn Andriiuk <konstantin@andriyuk.com>"
++pkgname=libcamera-ipa-ov12a10
++pkgver=1.0
++pkgrel=0
++pkgdesc="Simple IPA tuning for the OmniVision OV12A10 camera sensor"
++url="https://libcamera.org/"
++arch="noarch"
++license="CC0-1.0"
++depends="libcamera-ipa=99990.7.1-r0"
++options="!check" # Data-only package
++source="ov12a10.yaml"
++
++package() {
++	install -Dm644 "$srcdir"/ov12a10.yaml -t \
++		"$pkgdir"/usr/share/libcamera/ipa/simple/
++}
++
++sha512sums="
++2ee566653b17d565d2c0de67cbe6ebad25df5aac6051cad78e6bae52016fa2ca0247e964d735ac776b3e0bd447ead9c4fcb26cd7629228cdba3ceb91b46f378f  ov12a10.yaml
++"
+diff --git a/device/community/libcamera-ipa-ov12a10/ov12a10.yaml b/device/community/libcamera-ipa-ov12a10/ov12a10.yaml
+new file mode 100644
+index 0000000..e903d96
+--- /dev/null
++++ b/device/community/libcamera-ipa-ov12a10/ov12a10.yaml
+@@ -0,0 +1,11 @@
++# SPDX-License-Identifier: CC0-1.0
++%YAML 1.1
++---
++version: 1
++algorithms:
++  - BlackLevel:
++      blackLevel: 4096
++  - Awb:
++  - Adjust:
++  - Agc:
++...
+-- 
+2.43.0

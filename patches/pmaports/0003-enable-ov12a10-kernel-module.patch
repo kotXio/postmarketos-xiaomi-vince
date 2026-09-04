@@ -1,0 +1,23 @@
+diff --git a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+index fc5cd58..7ef85d4 100644
+--- a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
++++ b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+@@ -65,5 +65,5 @@ package() {
+ }
+ sha512sums="
+ 660bb93c2d19efe27a0c19a795801cbbf092f19589b96a857e320345b406a887498a0ab6b0e435b3ef5c244f5c193f82c8a61876853f3a6c1cf0932632d00c5f  linux-postmarketos-qcom-msm8953-v7.0.9-r0.tar.gz
+-39da852df98ec01f7278f699f1ae49baf0a90e8acd8e9077e4902d804ccfb17d1782a5fc91e61580f4761313039b323d8b540811464718064026e192701a451e  config-postmarketos-qcom-msm8953.aarch64
++2b10a0e15707ad680b0b3c437cf8c2778cc83851a170ab3ba1b7a2b618286da8247606e0d445e6b87df606055477e8db6a7e9b98a7b14bbac8aa75feb5148886  config-postmarketos-qcom-msm8953.aarch64
+ "
+diff --git a/device/community/linux-postmarketos-qcom-msm8953/config-postmarketos-qcom-msm8953.aarch64 b/device/community/linux-postmarketos-qcom-msm8953/config-postmarketos-qcom-msm8953.aarch64
+index 84551e6..5057b21 100644
+--- a/device/community/linux-postmarketos-qcom-msm8953/config-postmarketos-qcom-msm8953.aarch64
++++ b/device/community/linux-postmarketos-qcom-msm8953/config-postmarketos-qcom-msm8953.aarch64
+@@ -3706,6 +3706,7 @@ CONFIG_VIDEO_IMX219=m
+ # CONFIG_VIDEO_OV02C10 is not set
+ # CONFIG_VIDEO_OV08D10 is not set
+ # CONFIG_VIDEO_OV08X40 is not set
++CONFIG_VIDEO_OV12A10=m
+ # CONFIG_VIDEO_OV13858 is not set
+ # CONFIG_VIDEO_OV13B10 is not set
+ # CONFIG_VIDEO_OV2640 is not set

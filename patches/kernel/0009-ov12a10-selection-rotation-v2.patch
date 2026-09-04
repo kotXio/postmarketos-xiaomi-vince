@@ -1,0 +1,82 @@
+diff --git a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+index 24008c1fab56..de127d7a97d9 100644
+--- a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
++++ b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+@@ -181,7 +181,7 @@ camera-sensor@10 { // Rear camera
+ 		vaf-supply = <&pm8953_l17>;
+ 
+ 		orientation = <1>;
+-		rotation = <90>;
++		rotation = <270>;
+ 
+ 		status = "okay";
+ 
+diff --git a/drivers/media/i2c/ov12a10.c b/drivers/media/i2c/ov12a10.c
+index 64acd08b286e..5a8ccdace0b4 100644
+--- a/drivers/media/i2c/ov12a10.c
++++ b/drivers/media/i2c/ov12a10.c
+@@ -28,6 +28,13 @@
+ #define OV12A10_DATA_LANES		4
+ #define OV12A10_BITS_PER_SAMPLE		10
+ 
++#define OV12A10_NATIVE_WIDTH		4112
++#define OV12A10_NATIVE_HEIGHT		3088
++#define OV12A10_PIXEL_ARRAY_LEFT	8
++#define OV12A10_PIXEL_ARRAY_TOP		8
++#define OV12A10_PIXEL_ARRAY_WIDTH	4096
++#define OV12A10_PIXEL_ARRAY_HEIGHT	3072
++
+ #define OV12A10_WIDTH			2048
+ #define OV12A10_HEIGHT			1536
+ /* floor(1064 * 468 MHz / 108 MHz), in external pixel-rate units. */
+@@ -520,10 +527,42 @@ static int ov12a10_enum_frame_size(struct v4l2_subdev *sd,
+ 	return 0;
+ }
+ 
++static int ov12a10_get_selection(struct v4l2_subdev *sd,
++				 struct v4l2_subdev_state *state,
++				 struct v4l2_subdev_selection *sel)
++{
++	switch (sel->target) {
++	case V4L2_SEL_TGT_CROP:
++		sel->r = *v4l2_subdev_state_get_crop(state, sel->pad);
++		return 0;
++	case V4L2_SEL_TGT_NATIVE_SIZE:
++		sel->r.left = 0;
++		sel->r.top = 0;
++		sel->r.width = OV12A10_NATIVE_WIDTH;
++		sel->r.height = OV12A10_NATIVE_HEIGHT;
++		return 0;
++	case V4L2_SEL_TGT_CROP_BOUNDS:
++	case V4L2_SEL_TGT_CROP_DEFAULT:
++		sel->r.left = OV12A10_PIXEL_ARRAY_LEFT;
++		sel->r.top = OV12A10_PIXEL_ARRAY_TOP;
++		sel->r.width = OV12A10_PIXEL_ARRAY_WIDTH;
++		sel->r.height = OV12A10_PIXEL_ARRAY_HEIGHT;
++		return 0;
++	}
++
++	return -EINVAL;
++}
++
+ static int ov12a10_init_state(struct v4l2_subdev *sd,
+ 			      struct v4l2_subdev_state *state)
+ {
++	struct v4l2_rect *crop = v4l2_subdev_state_get_crop(state, 0);
++
+ 	ov12a10_update_pad_format(v4l2_subdev_state_get_format(state, 0));
++	crop->left = OV12A10_PIXEL_ARRAY_LEFT;
++	crop->top = OV12A10_PIXEL_ARRAY_TOP;
++	crop->width = OV12A10_PIXEL_ARRAY_WIDTH;
++	crop->height = OV12A10_PIXEL_ARRAY_HEIGHT;
+ 
+ 	return 0;
+ }
+@@ -587,6 +626,7 @@ static const struct v4l2_subdev_video_ops ov12a10_video_ops = {
+ static const struct v4l2_subdev_pad_ops ov12a10_pad_ops = {
+ 	.set_fmt = ov12a10_set_pad_format,
+ 	.get_fmt = v4l2_subdev_get_fmt,
++	.get_selection = ov12a10_get_selection,
+ 	.enum_mbus_code = ov12a10_enum_mbus_code,
+ 	.enum_frame_size = ov12a10_enum_frame_size,
+ 	.enable_streams = ov12a10_enable_streams,

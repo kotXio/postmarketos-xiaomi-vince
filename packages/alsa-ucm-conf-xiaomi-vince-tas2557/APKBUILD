@@ -1,0 +1,26 @@
+pkgname=alsa-ucm-conf-xiaomi-vince-tas2557
+pkgver=1.0
+pkgrel=1
+pkgdesc="Physically verified TAS2557 speaker and Mic2 UCM profile for Xiaomi vince"
+url="https://github.com/msm8953-mainline/alsa-ucm-conf"
+arch="noarch"
+license="BSD-3-Clause"
+depends="alsa-ucm-conf"
+replaces="alsa-ucm-conf soc-qcom-msm8953-ucm"
+options="!check"
+source="
+	HiFi-TAS2557.conf
+	xiaomi-vince.conf
+"
+
+package() {
+	install -Dm644 "$srcdir/HiFi-TAS2557.conf" \
+		"$pkgdir/usr/share/alsa/ucm2/Xiaomi/vince/HiFi-TAS2557.conf"
+	install -Dm644 "$srcdir/xiaomi-vince.conf" \
+		"$pkgdir/usr/share/alsa/ucm2/conf.d/xiaomi-vince/xiaomi-vince.conf"
+}
+
+sha512sums="
+0b293eb5898059b4df5cf143f34871f4b38964c10d23a0896cf4996338d5cd8d4ec391161f84a7d953d99fdfca01581f2220edebb365ca2ee1fcff6be0f1ca1e  HiFi-TAS2557.conf
+3e858480460afdba1eeb97055421f9acd88ae347cfcf61893174f39600a46861a8266d5fff9a2cc45c6abf0ba6947833331bd53e7c7bcb6c95d7e4c183676edc  xiaomi-vince.conf
+"

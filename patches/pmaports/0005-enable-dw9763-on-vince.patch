@@ -1,0 +1,132 @@
+From 1796b9100d5aeb1e84c4b265cdb77fd94bdda261 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Wed, 2 Sep 2026 15:26:21 +0300
+Subject: [PATCH 1/3] linux-postmarketos-qcom-msm8953: enable DW9763
+
+---
+ device/community/linux-postmarketos-qcom-msm8953/APKBUILD     | 4 ++--
+ .../config-postmarketos-qcom-msm8953.aarch64                  | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+index 7ef85d4..f7a135c 100644
+--- a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
++++ b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+@@ -3,7 +3,7 @@ maintainer="Barnabas Czeman <barnabas.czeman@postmarketos.org>"
+ _flavor="postmarketos-qcom-msm8953"
+ pkgname=linux-$_flavor
+ pkgver=7.0.9
+-pkgrel=1
++pkgrel=2
+ pkgdesc="Close to mainline linux kernel for Qualcomm Snapdragon MSM8953"
+ arch="aarch64"
+ _carch="arm64"
+@@ -65,5 +65,5 @@ package() {
+ }
+ sha512sums="
+ 660bb93c2d19efe27a0c19a795801cbbf092f19589b96a857e320345b406a887498a0ab6b0e435b3ef5c244f5c193f82c8a61876853f3a6c1cf0932632d00c5f  linux-postmarketos-qcom-msm8953-v7.0.9-r0.tar.gz
+-2b10a0e15707ad680b0b3c437cf8c2778cc83851a170ab3ba1b7a2b618286da8247606e0d445e6b87df606055477e8db6a7e9b98a7b14bbac8aa75feb5148886  config-postmarketos-qcom-msm8953.aarch64
++e1cfbfda28d0a8f9a7b9c9a210642b72ccb5b8fb080c7c96b5baa7678220a5bbbc3fd5fe6f9888cd7a599981243ad6fc2e2eade32ed8790bc4de59cc9996d2bf  config-postmarketos-qcom-msm8953.aarch64
+ "
+diff --git a/device/community/linux-postmarketos-qcom-msm8953/config-postmarketos-qcom-msm8953.aarch64 b/device/community/linux-postmarketos-qcom-msm8953/config-postmarketos-qcom-msm8953.aarch64
+index 5057b21..0d2a8ed 100644
+--- a/device/community/linux-postmarketos-qcom-msm8953/config-postmarketos-qcom-msm8953.aarch64
++++ b/device/community/linux-postmarketos-qcom-msm8953/config-postmarketos-qcom-msm8953.aarch64
+@@ -3763,7 +3763,7 @@ CONFIG_VIDEO_SIMPLE_LENS=m
+ # CONFIG_VIDEO_AK7375 is not set
+ # CONFIG_VIDEO_DW9714 is not set
+ # CONFIG_VIDEO_DW9719 is not set
+-# CONFIG_VIDEO_DW9768 is not set
++CONFIG_VIDEO_DW9768=m
+ # CONFIG_VIDEO_DW9807_VCM is not set
+ 
+ #
+-- 
+2.43.0
+
+
+From 1fcc92fc56d25d9f0a47f5e924c55b407355ab12 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Wed, 2 Sep 2026 15:26:21 +0300
+Subject: [PATCH 2/3] device-qcom-msm8953: load DW9763 on Vince
+
+---
+ device/community/device-qcom-msm8953/APKBUILD       | 6 +++---
+ device/community/device-qcom-msm8953/initfs-hook.sh | 1 +
+ device/community/device-qcom-msm8953/modules-initfs | 1 +
+ 3 files changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/device/community/device-qcom-msm8953/APKBUILD b/device/community/device-qcom-msm8953/APKBUILD
+index 4574553..97a5784 100644
+--- a/device/community/device-qcom-msm8953/APKBUILD
++++ b/device/community/device-qcom-msm8953/APKBUILD
+@@ -4,7 +4,7 @@ maintainer="Barnabas Czeman <barnabas.czeman@postmarketos.org>"
+ pkgname=device-qcom-msm8953
+ pkgdesc="Generic device package for various Qualcomm MSM8953/SDM450/SDM632-based devices"
+ pkgver=13
+-pkgrel=1
++pkgrel=2
+ url="https://postmarketos.org"
+ license="MIT"
+ arch="aarch64"
+@@ -64,9 +64,9 @@ xiaomi_daisy_fake_goodix() {
+ 
+ sha512sums="
+ fd541b7a48170fce536967ff96ffe5f30ed151490ea8eb618ae2e6b7fd51986e4e7c4229f805d4ae07f22ca58146045085162b1d49866630350f55f0038cc69c  deviceinfo
+-6f68f7700382809e71415847d88b6dfb421c8fad7ce49fe45fa66438fb5a0a54946bac4932808788108080bfeda883b78f9937f00cc2fa48a74ba98b7b07ca3c  initfs-hook.sh
++7ee615833b6c8a8c7b9914a769a6c8c0f7db4f2e1eebb905e3935527b6d7a5e38ff0577f94b4e2d488a33cb4faab62608e5eca5f54bf8233fde8aaee689864ec  initfs-hook.sh
+ 97e88eaa9b8e7989a20d2572479fe5d1fe0284de862da11c91b1f347099d5704673837db01a6b0c289fee0a2d7236f64fba31fd6001475f957c23203e34fd6fb  kernel-cmdline.conf
+-137b9aea2738bd26e82079bfe0111ffa4bc641e7037c6cb7ab77d2e2cd84d9fa173fc562d55443913026d67a29bf7729d47e394f8a2ed2d916b2a6494ea0343f  modules-initfs
++917fab14b2df22ce71cb19ddfaddaa355328314bd10036cc722ee448da4d250e51c32b95408e9200e53d9cec4c3fef308f50bebdc52a04a0f55db4821839f670  modules-initfs
+ a2608b01b7b6e2dade694af355ff4f0f26cad49cf54bc332c77eb75d19fdc985f7f996fedb72753de447be0391deabf5fcea52406791d1e6e0d165703b63f145  90-device-xiaomi-daisy.rules
+ 17af1dabd211ec942bd8cbe63743c874ef87f0613ae08b8de3f77bdb87962eae402eee2b6604d6040700d4e7ae1b898cb67c1b01f2b86db23af31435953eaa51  61-gmobile-wakeup-lenovo-cd18781y.hwdb
+ "
+diff --git a/device/community/device-qcom-msm8953/initfs-hook.sh b/device/community/device-qcom-msm8953/initfs-hook.sh
+index c9e79f1..bd045b9 100644
+--- a/device/community/device-qcom-msm8953/initfs-hook.sh
++++ b/device/community/device-qcom-msm8953/initfs-hook.sh
+@@ -2,5 +2,6 @@
+ 
+ if tr '\0' '\n' < /sys/firmware/devicetree/base/compatible |
+ 	grep -qx 'xiaomi,vince'; then
++	modprobe dw9768
+ 	modprobe ov12a10
+ fi
+diff --git a/device/community/device-qcom-msm8953/modules-initfs b/device/community/device-qcom-msm8953/modules-initfs
+index 8db12b4..26bdfd7 100644
+--- a/device/community/device-qcom-msm8953/modules-initfs
++++ b/device/community/device-qcom-msm8953/modules-initfs
+@@ -1,4 +1,5 @@
+ atmel-mxt-ts
++dw9768
+ edt-ft5x06
+ goodix-ts
+ msm
+-- 
+2.43.0
+
+
+From 0287ba9d46b041c6d6d8b933cdb17d0f025e3ac1 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Wed, 2 Sep 2026 16:34:56 +0300
+Subject: [PATCH 3/3] linux-postmarketos-qcom-msm8953: package DW9763 lens link
+
+---
+ device/community/linux-postmarketos-qcom-msm8953/APKBUILD | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+index f7a135c..24eda04 100644
+--- a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
++++ b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+@@ -3,7 +3,7 @@ maintainer="Barnabas Czeman <barnabas.czeman@postmarketos.org>"
+ _flavor="postmarketos-qcom-msm8953"
+ pkgname=linux-$_flavor
+ pkgver=7.0.9
+-pkgrel=2
++pkgrel=3
+ pkgdesc="Close to mainline linux kernel for Qualcomm Snapdragon MSM8953"
+ arch="aarch64"
+ _carch="arm64"
+-- 
+2.43.0

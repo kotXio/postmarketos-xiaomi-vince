@@ -1,0 +1,11 @@
+diff --git a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+index 5c44071..c236a35 100644
+--- a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
++++ b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+@@ -6 +6 @@ pkgver=7.0.9
+-pkgrel=0
++pkgrel=1
+@@ -16,0 +17 @@ makedepends="
++	bash
+@@ -39,0 +41 @@ prepare() {
++	scripts/config --file .config -e SND_SOC_TAS2557

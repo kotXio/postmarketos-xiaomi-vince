@@ -1,0 +1,56 @@
+diff --git a/device/community/device-qcom-msm8953/APKBUILD b/device/community/device-qcom-msm8953/APKBUILD
+index 4ff0777..4574553 100644
+--- a/device/community/device-qcom-msm8953/APKBUILD
++++ b/device/community/device-qcom-msm8953/APKBUILD
+@@ -4,7 +4,7 @@ maintainer="Barnabas Czeman <barnabas.czeman@postmarketos.org>"
+ pkgname=device-qcom-msm8953
+ pkgdesc="Generic device package for various Qualcomm MSM8953/SDM450/SDM632-based devices"
+ pkgver=13
+-pkgrel=0
++pkgrel=1
+ url="https://postmarketos.org"
+ license="MIT"
+ arch="aarch64"
+@@ -28,6 +28,7 @@ subpackages="
+ "
+ source="
+ 	deviceinfo
++	initfs-hook.sh
+ 	kernel-cmdline.conf
+ 	modules-initfs
+ 	90-device-xiaomi-daisy.rules
+@@ -63,8 +64,9 @@ xiaomi_daisy_fake_goodix() {
+ 
+ sha512sums="
+ fd541b7a48170fce536967ff96ffe5f30ed151490ea8eb618ae2e6b7fd51986e4e7c4229f805d4ae07f22ca58146045085162b1d49866630350f55f0038cc69c  deviceinfo
++6f68f7700382809e71415847d88b6dfb421c8fad7ce49fe45fa66438fb5a0a54946bac4932808788108080bfeda883b78f9937f00cc2fa48a74ba98b7b07ca3c  initfs-hook.sh
+ 97e88eaa9b8e7989a20d2572479fe5d1fe0284de862da11c91b1f347099d5704673837db01a6b0c289fee0a2d7236f64fba31fd6001475f957c23203e34fd6fb  kernel-cmdline.conf
+-29986b499f4b45e5112cb650685e9778bbfe6812fe2833d1eccca949323d69714b350ad3b1eaa3c9838f54088c95e7774c58937859685232f06fa18e8eb7fc5b  modules-initfs
++137b9aea2738bd26e82079bfe0111ffa4bc641e7037c6cb7ab77d2e2cd84d9fa173fc562d55443913026d67a29bf7729d47e394f8a2ed2d916b2a6494ea0343f  modules-initfs
+ a2608b01b7b6e2dade694af355ff4f0f26cad49cf54bc332c77eb75d19fdc985f7f996fedb72753de447be0391deabf5fcea52406791d1e6e0d165703b63f145  90-device-xiaomi-daisy.rules
+ 17af1dabd211ec942bd8cbe63743c874ef87f0613ae08b8de3f77bdb87962eae402eee2b6604d6040700d4e7ae1b898cb67c1b01f2b86db23af31435953eaa51  61-gmobile-wakeup-lenovo-cd18781y.hwdb
+ "
+diff --git a/device/community/device-qcom-msm8953/initfs-hook.sh b/device/community/device-qcom-msm8953/initfs-hook.sh
+new file mode 100644
+index 0000000..c9e79f1
+--- /dev/null
++++ b/device/community/device-qcom-msm8953/initfs-hook.sh
+@@ -0,0 +1,6 @@
++#!/bin/sh
++
++if tr '\0' '\n' < /sys/firmware/devicetree/base/compatible |
++	grep -qx 'xiaomi,vince'; then
++	modprobe ov12a10
++fi
+diff --git a/device/community/device-qcom-msm8953/modules-initfs b/device/community/device-qcom-msm8953/modules-initfs
+index 4bbb238..8db12b4 100644
+--- a/device/community/device-qcom-msm8953/modules-initfs
++++ b/device/community/device-qcom-msm8953/modules-initfs
+@@ -3,6 +3,7 @@ edt-ft5x06
+ goodix-ts
+ msm
+ novatek-nvt-ts
++ov12a10
+ panel-boe-bs052fhm-a00-6c01
+ panel-flipkart-rimob-nt35532-cs
+ panel-himax-hx83112b
