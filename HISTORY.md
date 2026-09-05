@@ -3,34 +3,47 @@
 This chronology lists changes and investigations verified on the physical
 handset. Reproduction details are linked where available.
 
+## 2026-09-05 — Angelfish hardware video through Venus
+
+- Added hardware video decoding to Angelfish through Qualcomm Venus using the
+  patched Qt WebEngine `6.11.1-r10`.
+- YouTube playback is smooth and used about half as much CPU as software
+  decoding in a comparison test.
+- Extended fullscreen playback remained visually normal. Two automatic Venus
+  firmware recoveries appeared in the system log, so long-session stability is
+  still being monitored.
+
+## 2026-09-05 — PMI8950 dual-colour rear torch
+
+- Enabled the rear torch in Plasma Mobile and through standard Linux LED
+  controls.
+- Added four brightness levels and separate control of the cool and warm LEDs,
+  with a safe `50 mA` per-channel limit.
+- Photo flash and camera-synchronised strobe support remain future work.
+
 ## 2026-09-05 — OV12A10 one-shot autofocus
 
-- Added standard libcamera Auto/Trigger/State controls for the Simple pipeline,
-  a CPU SoftISP focus metric and a bounded two-stage contrast search.
-- Updated Plasma Camera to trigger exactly one scan for each rear-camera
-  session while leaving the front camera unchanged.
-- Fixed two teardown races found through rapid rear-to-front switching: late
-  lens callbacks and malformed delayed sensor controls.
-- Verified repeatable focus, rear/front switching, saved photos, normal reboot,
-  no new coredump, lens parking and full camera-device runtime suspend.
-- Retained Plasma Camera's slow, timestamp-imperfect, no-audio encoded-video
-  result as a separate application limitation.
+- Added one-shot autofocus for the OV12A10 rear camera in libcamera and Plasma
+  Camera.
+- Fixed two shutdown races found while rapidly switching between the rear and
+  front cameras.
+- Autofocus, camera switching, saved photos and safe lens parking now work on
+  the test phone.
+- Plasma Camera video recording remains slow and has no audio; direct libcamera
+  capture is unaffected.
 
 ## 2026-09-04 — Angelfish stability and Venus investigation
 
 - Replaced the all-software `--disable-gpu` workaround with
   `--disable-gpu-rasterization --disable-webgl`.
-- Testing confirmed responsive pages and smooth YouTube playback.
-- Confirmed that Chromium still reports software video decode.
-- Proved the Qualcomm Venus stateful V4L2 hardware path directly with H.264 and
-  HEVC 1080p encode/decode tests.
-- Proved GStreamer `v4l2h264dec` on `/dev/video6` with all 120 fixture frames;
-  it used about `10.4x` less CPU than the `openh264dec` software control.
-- Confirmed that paced FFmpeg `h264_v4l2m2m` selects `qcom-venus` and matches
-  software-decoder output at all `120/120` frame hashes. Unpaced raw Annex-B
-  input exposed a documented FFmpeg drain limitation.
-- Documented the current
-  [hardware-video integration limitation](fixes/hardware-video.md).
+- Pages became responsive again and YouTube played smoothly, although the
+  browser was still decoding video in software.
+- Direct H.264 and HEVC tests confirmed that the Qualcomm Venus hardware codec
+  was working outside the browser.
+- GStreamer hardware decoding used about one tenth of the CPU required by the
+  software decoder. FFmpeg produced matching output when the input was paced.
+- Documented the remaining browser-integration work, which led to the
+  [Qt WebEngine update](fixes/hardware-video.md) the following day.
 
 ## 2026-09-02 — DW9763 manual focus
 

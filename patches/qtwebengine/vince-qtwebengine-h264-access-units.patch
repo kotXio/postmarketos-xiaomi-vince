@@ -1,0 +1,55 @@
+From b6f490b43eebcc8aad7f9fecc01e4d59e827d547 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Wed, 11 Jun 2025 11:07:05 +0300
+Subject: [PATCH] media/gpu/v4l2: Avoid placing incomplete H264 access units in
+ buffers
+
+Upstream-Status: Pending
+
+Don't place SPS, PPS, etc NALUs in their own separate buffers
+unconditionally, as they are not full access units by themselves,
+and may confuse the decoder.
+
+This local copy follows the six-line Chromium 142 refresh carried by TI
+meta-arago commit 30a611f56a4bd74d421e36ecddf705b956c01648. It applies to
+the Qt WebEngine Chromium 140 source used for the Vince build.
+---
+ .../media/gpu/v4l2/v4l2_stateful_video_decoder.cc   | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/src/3rdparty/chromium/media/gpu/v4l2/v4l2_stateful_video_decoder.cc b/src/3rdparty/chromium/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
+index 79c880f365..d29cef84d7 100644
+--- a/src/3rdparty/chromium/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
++++ b/src/3rdparty/chromium/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
+@@ -1322,8 +1322,8 @@ H264FrameReassembler::FindH264FrameBoundary(const uint8_t* const data,
+           return std::nullopt;
+         }
+         previous_slice_header_.reset();
+-        return FrameBoundaryInfo{.is_whole_frame = true,
+-                                 .is_start_of_new_frame = true,
++        return FrameBoundaryInfo{.is_whole_frame = false,
++                                 .is_start_of_new_frame = false,
+                                  .nalu_size = nalu_size};
+       case H264NALU::kPPS:
+         result = h264_parser_.ParsePPS(&pps_id_);
+@@ -1332,8 +1332,8 @@ H264FrameReassembler::FindH264FrameBoundary(const uint8_t* const data,
+           return std::nullopt;
+         }
+         previous_slice_header_.reset();
+-        return FrameBoundaryInfo{.is_whole_frame = true,
+-                                 .is_start_of_new_frame = true,
++        return FrameBoundaryInfo{.is_whole_frame = false,
++                                 .is_start_of_new_frame = false,
+                                  .nalu_size = nalu_size};
+       case H264NALU::kNonIDRSlice:
+       case H264NALU::kIDRSlice: {
+@@ -1372,7 +1372,7 @@ H264FrameReassembler::FindH264FrameBoundary(const uint8_t* const data,
+         // Anything else than SPS, PPS and Non/IDRs marks a new frame boundary.
+         previous_slice_header_.reset();
+-        return FrameBoundaryInfo{.is_whole_frame = true,
+-                                 .is_start_of_new_frame = true,
++        return FrameBoundaryInfo{.is_whole_frame = false,
++                                 .is_start_of_new_frame = false,
+                                  .nalu_size = nalu_size};
+       default:
+         VLOGF(4) << "Unsupported NALU " << kKnownNALUNames[nalu.nal_unit_type];

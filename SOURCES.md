@@ -182,6 +182,30 @@ and
 It disables only `monitor.libcamera`, retaining V4L2 and the rest of the
 `main` profile.
 
+## PMI8950 rear torch
+
+Kernel patch `0014` is a project-authored, continuous-torch-only backend for
+the legacy PMI8950 two-channel subtype. Register definitions and applicable
+protection sequencing were adapted from Xiaomi/Qualcomm's GPLv2
+[`leds-qpnp-flash.c`](https://github.com/xiaomi-msm8953-devs/android_kernel_xiaomi_msm8953/blob/dcaf331bd84a5faf23b8641ff195e4833a5c47bc/drivers/leds/leds-qpnp-flash.c)
+and the pinned downstream
+[`pmi8950.dtsi`](https://android.googlesource.com/kernel/msm/+/f492c5d87df6daa7c010dd4d14a7f34da06d9757/arch/arm64/boot/dts/qcom/pmi8950.dtsi).
+The public source retains the applicable Linux Foundation attribution and GPL
+license notice.
+
+The user interface follows the standard Linux
+[multicolor LED class](https://docs.kernel.org/leds/leds-class-multicolor.html).
+Plasma compatibility was checked against the current
+[flashlight quick-setting implementation](https://github.com/KDE/plasma-mobile/blob/master/quicksettings/flashlight/flashlightutil.cpp),
+which discovers `*:torch`/`*:flash` LED-class devices and toggles their normal
+brightness attribute.
+
+The `50 mA` per-channel cap and channel order `0=cool 1=warm` are project test
+results from one physical handset. They were established through separate
+minimum-current channel tests before combined and live-reconfiguration tests.
+The published patch does not copy the roughly 2700-line downstream driver and
+does not implement its private trigger interface.
+
 ## Angelfish and hardware video
 
 The Angelfish launcher workaround is project-authored from controlled A/B
@@ -191,14 +215,41 @@ testing, not copied configuration. The interpretation used official
 [Chromium VA-API](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/gpu/vaapi.md)
 documentation.
 
-The separate Venus investigation used the Linux
+The final browser package targets Alpine aports `3.24-stable` commit
+`3ca62a2571378ee35a0e149a0e91454b57240737`, its
+[`qt6-qtwebengine` recipe](https://github.com/alpinelinux/aports/blob/3ca62a2571378ee35a0e149a0e91454b57240737/community/qt6-qtwebengine/APKBUILD),
+Qt WebEngine `6.11.1` and bundled Chromium commit
+[`37b6aeaa3ef9bf7e1901aa02a317a2707557709d`](https://github.com/qt/qtwebengine-chromium/tree/37b6aeaa3ef9bf7e1901aa02a317a2707557709d/chromium).
+The cumulative aport diff and all source patches are published under
+[`patches/qtwebengine/`](patches/qtwebengine/).
+
+Three source changes directly derive from external code:
+
+- `vince-qtwebengine-h264-access-units.patch` retains Alexandros Frantzis's
+  Collabora authorship and adapts the six-line Chromium 142 refresh carried by
+  [TI meta-arago commit `30a611f5`](https://git.ti.com/cgit/arago-project/meta-arago/commit/meta-arago-distro?id=30a611f56a4bd74d421e36ecddf705b956c01648)
+  to the pinned Chromium 140 tree;
+- `vince-qtwebengine-mt21-neon-types.patch` adapts the same two strict vector
+  type corrections from the
+  [openSUSE Electron patch](https://src.opensuse.org/rpm/nodejs-electron/src/commit/d74ae9ab235156a9c62c9bdc6e4fadae35888f0b3a8e0a40b41c50667213da91/mt21_util-flax-vector-conversions.patch);
+- `vince-qtwebengine-multiplanar-native-pixmap.patch` is the exact Qt 6.11
+  backport commit
+  [`ae6991d950bb343accad96b96047fe605c17bcc3`](https://github.com/qt/qtwebengine/commit/ae6991d950bb343accad96b96047fe605c17bcc3)
+  by Peter Varga for `QTBUG-145344`, with its original review and cherry-pick
+  metadata retained.
+
+The V4L2 Qt/CMake plumbing, public musl `timeval` types, Linux per-plane NV12
+selection and cumulative Alpine recipe integration are project-authored. They
+were developed against the pinned trees using Chromium's
+[standard-Linux V4L2 enablement](https://chromium.googlesource.com/chromium/src/+/149471b4a55327f34b1130a71bb85aff4d35d487%5E%21/)
+and exact
+[MailboxVideoFrameConverter](https://chromium.googlesource.com/chromium/src/media/+/37fc505397bdffdd90ace984c520d96c6657ce88/gpu/chromeos/mailbox_video_frame_converter.cc)
+as references. The Linux
 [stateful V4L2 decoder API](https://docs.kernel.org/userspace-api/media/v4l/dev-decoder.html),
 [GStreamer hardware-decode guidance](https://gstreamer.freedesktop.org/documentation/tutorials/playback/hardware-accelerated-video-decoding.html),
-[FFmpeg V4L2 mem2mem implementation](https://ffmpeg.org/doxygen/trunk/v4l2__m2m__dec_8c.html),
-the [Chromium Linux V4L2 change](https://chromium.googlesource.com/chromium/src/+/149471b4a55327f34b1130a71bb85aff4d35d487%5E%21/)
-and the exact Alpine
-[`qt6-qtwebengine` recipe](https://github.com/alpinelinux/aports/blob/3.24-stable/community/qt6-qtwebengine/APKBUILD).
-This work has not yet produced a custom browser package.
+and [FFmpeg V4L2 mem2mem implementation](https://ffmpeg.org/doxygen/trunk/v4l2__m2m__dec_8c.html)
+were used to validate the already working Qualcomm Venus decoder independently
+before changing Qt WebEngine.
 
 ## Explicit non-sources
 
@@ -209,7 +260,10 @@ This work has not yet produced a custom browser package.
 - The review-stage autofocus patches above were not applied unchanged. The
   public autofocus series is the separately tested project implementation;
   raw EEPROM contents remain excluded.
-- Flash/torch experiments and `libva-v4l2-request` are not part of the current
-  public source or release.
+- High-current photo flash, V4L2/sensor strobe integration and
+  `libva-v4l2-request` are not part of the current public source or release.
+- TI's other device-path, sandbox and OUTPUT-queue V4L2 patches were diagnostic
+  comparisons only and are not present in the final Qt WebEngine source.
+- qutebrowser and Falkon reports were symptom comparisons, not code sources.
 - Proprietary firmware, camera blobs, EEPROM dumps, photos and recordings are
   not redistributed by this project.

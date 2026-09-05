@@ -1,7 +1,7 @@
 # OV12A10 one-shot autofocus
 
-Status: physically verified in Plasma Camera, including rapid camera switching,
-saved stills, teardown race guards, lens parking and runtime suspend.
+Status: working in Plasma Camera, including rapid camera switching, saved
+photos, safe shutdown, lens parking and runtime suspend.
 
 ## Problem
 
@@ -23,20 +23,12 @@ step `8`, two settling frames and the median of three valid metric frames. The
 kernel patch extends the actuator's exposed maximum to `726`; the existing
 driver still parks and runtime-suspends the lens after close.
 
-## Verification
+## Tested
 
-- A fixed-scene native pair selected `522` twice; curve correlation was
-  `0.997992580`.
-- The first in-stack scan selected `530`, within `8` DAC codes of the earlier
-  independent result `538`.
-- Cancel, successful Focused results and ordinary flat-scene Failed results
-  were all observed without out-of-range lens commands.
-- Rear/front previews, two saved stills, seven selections and three exits while
-  scanning completed without a crash.
-- The formerly fatal malformed-control condition was hit twice and safely
-  skipped; no new coredump appeared.
-- OV12A10, DW9763 and OV5675 all returned to `suspended` after application
-  close and remained correct after a normal reboot.
+One-shot autofocus repeatedly found a sharp position on the test phone. Rear
+and front camera switching, saved photos and closing the application during a
+scan worked without crashes. The lens parks correctly after use, and the
+camera continues to work after reboot.
 
 ## Compatibility and limitations
 

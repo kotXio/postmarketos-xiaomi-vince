@@ -1,0 +1,930 @@
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Subject: [PATCH] leds: qcom: add PMI8950 dual-color torch for Vince
+
+Add a small legacy-PMI8950 continuous-torch backend and expose the two
+physical emitters as one standard Linux multicolor LED.  Xiaomi Redmi 5 Plus
+opts into a tested 50 mA per-channel cap; photo flash and V4L2 strobe remain
+out of scope.
+
+Register definitions and protection sequencing are based on Qualcomm/Xiaomi's
+GPLv2 QPNP flash driver and pinned PMI8950 Device Tree.  The user-facing ABI
+uses the standard Linux multicolor LED class and matches Plasma Mobile's
+*:torch discovery behavior.
+
+Hardware references:
+https://github.com/xiaomi-msm8953-devs/android_kernel_xiaomi_msm8953/blob/dcaf331bd84a5faf23b8641ff195e4833a5c47bc/drivers/leds/leds-qpnp-flash.c
+https://android.googlesource.com/kernel/msm/+/f492c5d87df6daa7c010dd4d14a7f34da06d9757/arch/arm64/boot/dts/qcom/pmi8950.dtsi
+
+Interface references:
+https://docs.kernel.org/leds/leds-class-multicolor.html
+https://github.com/KDE/plasma-mobile/blob/master/quicksettings/flashlight/flashlightutil.cpp
+
+---
+diff --git a/Documentation/devicetree/bindings/leds/qcom,pmi8950-flash-led.yaml b/Documentation/devicetree/bindings/leds/qcom,pmi8950-flash-led.yaml
+new file mode 100644
+index 000000000000..5c1eb893983e
+--- /dev/null
++++ b/Documentation/devicetree/bindings/leds/qcom,pmi8950-flash-led.yaml
+@@ -0,0 +1,55 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/leds/qcom,pmi8950-flash-led.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Qualcomm PMI8950 flash LED controller
++
++maintainers:
++  - Kostiantyn Andriiuk <konstantin@andriyuk.com>
++
++description: |
++  The Qualcomm PMI8950 contains a legacy two-channel flash LED controller.
++  Its register layout predates and differs from the three- and four-channel
++  controllers handled by qcom,spmi-flash-led.
++
++  The Linux driver exposes the two physical channels as one continuous white
++  multicolor-class torch. Their cool and warm intensities can be controlled
++  independently. Photo-flash and camera-triggered strobe are intentionally
++  not part of this binding.
++
++properties:
++  compatible:
++    const: qcom,pmi8950-flash-led
++
++  reg:
++    maxItems: 1
++
++  qcom,torch-max-microamp:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    description:
++      Hard continuous-current cap for each physical torch channel. The Vince
++      value is limited to 50 mA per channel after bounded hardware tests.
++    const: 50000
++
++required:
++  - compatible
++  - reg
++  - qcom,torch-max-microamp
++
++additionalProperties: false
++
++examples:
++  - |
++    pmic {
++        #address-cells = <1>;
++        #size-cells = <0>;
++
++        led-controller@d300 {
++            compatible = "qcom,pmi8950-flash-led";
++            reg = <0xd300>;
++            qcom,torch-max-microamp = <50000>;
++        };
++    };
++...
+diff --git a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+index 1b3ea96262d3..fc35daa4b0c8 100644
+--- a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
++++ b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+@@ -288,6 +288,12 @@ &pm8953_l23 {
+ 	regulator-min-microvolt = <1200000>;
+ };
+ 
++&pmi8950_flash_led {
++	qcom,torch-max-microamp = <50000>;
++
++	status = "okay";
++};
++
+ &pmi8950_haptics {
+ 	qcom,actuator-type = <HAP_TYPE_ERM>;
+ 	qcom,brake-pattern = <0x3 0x3 0x0 0x0>;
+diff --git a/arch/arm64/boot/dts/qcom/pmi8950.dtsi b/arch/arm64/boot/dts/qcom/pmi8950.dtsi
+index 6bc431199afc..14e4a5bfa5aa 100644
+--- a/arch/arm64/boot/dts/qcom/pmi8950.dtsi
++++ b/arch/arm64/boot/dts/qcom/pmi8950.dtsi
+@@ -216,6 +216,13 @@ pmi8950_haptics: haptics@c000 {
+ 			status = "disabled";
+ 		};
+ 
++		pmi8950_flash_led: led-controller@d300 {
++			compatible = "qcom,pmi8950-flash-led";
++			reg = <0xd300>;
++
++			status = "disabled";
++		};
++
+ 		pmi8950_wled: leds@d800 {
+ 			compatible = "qcom,pmi8950-wled";
+ 			reg = <0xd800>, <0xd900>;
+diff --git a/arch/arm64/configs/msm8953.config b/arch/arm64/configs/msm8953.config
+index e2c380892fdf..2bd5dd025776 100644
+--- a/arch/arm64/configs/msm8953.config
++++ b/arch/arm64/configs/msm8953.config
+@@ -12,6 +12,8 @@ CONFIG_DRM=m
+ CONFIG_DRM_PANEL_MSM8953_GENERATED=y
+ # CONFIG_FW_LOADER_USER_HELPER is not set
+ CONFIG_INTERCONNECT_QCOM_MSM8953=y
++CONFIG_LEDS_QCOM_PMI8950_TORCH=y
++CONFIG_LEDS_CLASS_MULTICOLOR=y
+ CONFIG_MFD_QCOM_RPM=y
+ CONFIG_MSM_GCC_8953_DEBUG=y
+ CONFIG_MSM_GCC_8953=y
+diff --git a/drivers/leds/Kconfig b/drivers/leds/Kconfig
+index 26db86974c68..c32164f52384 100644
+--- a/drivers/leds/Kconfig
++++ b/drivers/leds/Kconfig
+@@ -619,6 +619,20 @@ config LEDS_PCA995X
+ 	  LED driver chips accessed via the I2C bus. Supported
+ 	  devices include PCA9955BTW, PCA9952TW and PCA9955TW.
+ 
++config LEDS_QCOM_PMI8950_TORCH
++	tristate "Qualcomm PMI8950 torch support"
++	depends on LEDS_CLASS_MULTICOLOR
++	depends on OF
++	depends on SPMI
++	help
++	  This driver provides continuous torch control of the two channels in
++	  the legacy Qualcomm PMI8950 flash block. The channels form one
++	  multicolor LED whose cool and warm intensities can be adjusted
++	  independently.
++
++	  This driver intentionally provides neither photo-flash nor
++	  camera/V4L2 integration.
++
+ config LEDS_QNAP_MCU
+ 	tristate "LED Support for QNAP MCU controllers"
+ 	depends on LEDS_CLASS
+diff --git a/drivers/leds/Makefile b/drivers/leds/Makefile
+index 558347fc9bf8..e4b430de6420 100644
+--- a/drivers/leds/Makefile
++++ b/drivers/leds/Makefile
+@@ -84,6 +84,7 @@ obj-$(CONFIG_LEDS_PCA995X)		+= leds-pca995x.o
+ obj-$(CONFIG_LEDS_PM8058)		+= leds-pm8058.o
+ obj-$(CONFIG_LEDS_POWERNV)		+= leds-powernv.o
+ obj-$(CONFIG_LEDS_PWM)			+= leds-pwm.o
++obj-$(CONFIG_LEDS_QCOM_PMI8950_TORCH)	+= leds-qcom-pmi8950-torch.o
+ obj-$(CONFIG_LEDS_QNAP_MCU)		+= leds-qnap-mcu.o
+ obj-$(CONFIG_LEDS_REGULATOR)		+= leds-regulator.o
+ obj-$(CONFIG_LEDS_SC27XX_BLTC)		+= leds-sc27xx-bltc.o
+diff --git a/drivers/leds/leds-qcom-pmi8950-torch.c b/drivers/leds/leds-qcom-pmi8950-torch.c
+new file mode 100644
+index 000000000000..48e7af517345
+--- /dev/null
++++ b/drivers/leds/leds-qcom-pmi8950-torch.c
+@@ -0,0 +1,756 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Register definitions and protection sequencing are based on Qualcomm's
++ * downstream QPNP flash driver.
++ *
++ * Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
++ * Copyright (c) 2026 Kostiantyn Andriiuk
++ *
++ * Continuous torch support for the legacy PMI8950 flash block.
++ *
++ * This intentionally excludes photo-flash and V4L2 integration. Both
++ * physical channels form one white torch with independently adjustable
++ * cool and warm intensities.
++ */
++
++#include <linux/bits.h>
++#include <linux/delay.h>
++#include <linux/device.h>
++#include <linux/led-class-multicolor.h>
++#include <linux/leds.h>
++#include <linux/mod_devicetable.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/platform_device.h>
++#include <linux/pm.h>
++#include <linux/property.h>
++#include <linux/regmap.h>
++
++#include <dt-bindings/leds/common.h>
++
++#define PMI8950_FLASH_REVISION1_REG		0x00
++#define PMI8950_FLASH_REVISION2_REG		0x01
++#define PMI8950_FLASH_REVISION3_REG		0x02
++#define PMI8950_FLASH_REVISION4_REG		0x03
++#define PMI8950_FLASH_TYPE_REG			0x04
++#define PMI8950_FLASH_SUBTYPE_REG		0x05
++#define PMI8950_FLASH_FAULT_STATUS_REG		0x08
++#define PMI8950_FLASH_MAX_CURRENT_REG		0x41
++#define PMI8950_FLASH_LED0_CURRENT_REG		0x42
++#define PMI8950_FLASH_LED1_CURRENT_REG		0x43
++#define PMI8950_FLASH_CLAMP_CURRENT_REG		0x44
++#define PMI8950_FLASH_MODULE_ENABLE_REG		0x46
++#define PMI8950_FLASH_STROBE_REG		0x47
++#define PMI8950_FLASH_TIMER_CTRL_REG		0x48
++#define PMI8950_FLASH_HEADROOM_REG		0x4a
++#define PMI8950_FLASH_STARTUP_DELAY_REG		0x4b
++#define PMI8950_FLASH_MASK_ENABLE_REG		0x4c
++#define PMI8950_FLASH_VREG_OK_FORCE_REG		0x4f
++#define PMI8950_FLASH_FAULT_DETECT_REG		0x51
++#define PMI8950_FLASH_THERMAL_DERATE_REG	0x52
++#define PMI8950_FLASH_CURRENT_RAMP_REG		0x54
++#define PMI8950_FLASH_VPH_DROOP_REG		0x5a
++#define PMI8950_FLASH_HEADROOM_SENSE0_REG	0x5c
++#define PMI8950_FLASH_HEADROOM_SENSE1_REG	0x5d
++#define PMI8950_FLASH_SECURE_ACCESS_REG		0xd0
++#define PMI8950_FLASH_TORCH_MODE_REG		0xe4
++
++#define PMI8950_FLASH_TYPE			0x18
++#define PMI8950_FLASH_SUBTYPE_DUAL		0x01
++
++#define PMI8950_FLASH_CURRENT_MASK		GENMASK(6, 0)
++#define PMI8950_FLASH_MODULE_ENABLE_MASK	GENMASK(7, 5)
++#define PMI8950_FLASH_STROBE_MASK		GENMASK(7, 6)
++#define PMI8950_FLASH_TIMER_CTRL_MASK		GENMASK(1, 0)
++#define PMI8950_FLASH_HEADROOM_MASK		GENMASK(1, 0)
++#define PMI8950_FLASH_STARTUP_DELAY_MASK	GENMASK(1, 0)
++#define PMI8950_FLASH_MASK_ENABLE_MASK		GENMASK(7, 5)
++#define PMI8950_FLASH_VREG_OK_FORCE_MASK	GENMASK(7, 6)
++#define PMI8950_FLASH_FAULT_DETECT_MASK		BIT(7)
++#define PMI8950_FLASH_THERMAL_DERATE_MASK	(BIT(7) | GENMASK(5, 0))
++#define PMI8950_FLASH_CURRENT_RAMP_MASK		(BIT(7) | GENMASK(5, 0))
++#define PMI8950_FLASH_VPH_DROOP_MASK		(BIT(7) | GENMASK(6, 4) | GENMASK(1, 0))
++#define PMI8950_FLASH_HEADROOM_SENSE_MASK	(BIT(7) | BIT(0))
++#define PMI8950_FLASH_TORCH_MODE_MASK		GENMASK(1, 0)
++
++#define PMI8950_FLASH_MODULE_DISABLED		0x60
++#define PMI8950_FLASH_MODULE_ENABLED		0x80
++#define PMI8950_FLASH_TORCH_DISABLED		0x03
++#define PMI8950_FLASH_TORCH_ENABLED		0x00
++#define PMI8950_FLASH_SECURE_UNLOCK		0xa5
++#define PMI8950_FLASH_HEADROOM_SENSE_DISABLED	0x01
++#define PMI8950_FLASH_HEADROOM_SENSE_ENABLED	0x81
++
++/* Verified stock protection values on Xiaomi Redmi 5 Plus (vince). */
++#define PMI8950_FLASH_TORCH_MAX_CODE		0x0f
++#define PMI8950_FLASH_IDLE_MAX_CODE		0x4f
++#define PMI8950_FLASH_CLAMP_200MA_CODE		0x0f
++#define PMI8950_FLASH_HEADROOM_500MV		0x03
++#define PMI8950_FLASH_STARTUP_128US		0x03
++#define PMI8950_FLASH_MASK2_ENABLED		0x20
++#define PMI8950_FLASH_VREG_OK_HW		0x40
++#define PMI8950_FLASH_FAULT_DETECT_ENABLED	0x80
++#define PMI8950_FLASH_THERMAL_DERATE_STOCK	0xa0
++#define PMI8950_FLASH_CURRENT_RAMP_6P7US	0xad
++#define PMI8950_FLASH_VPH_DROOP_3V_10US		0xe1
++
++#define PMI8950_TORCH_CHANNELS			2
++#define PMI8950_TORCH_CURRENT_STEP_UA		12500
++#define PMI8950_TORCH_VINCE_MAX_CURRENT_UA	50000
++#define PMI8950_TORCH_VINCE_MAX_CURRENT_CODE	0x03
++#define PMI8950_TORCH_MAX_BRIGHTNESS		4
++#define PMI8950_TORCH_RAMP_DOWN_MIN_US		2160
++#define PMI8950_TORCH_RAMP_DOWN_MAX_US		2161
++
++struct pmi8950_torch {
++	struct device *dev;
++	struct regmap *regmap;
++	struct mutex lock; /* Serializes controller and both physical channels. */
++	struct led_classdev_mc mc_cdev;
++	struct mc_subled subled[PMI8950_TORCH_CHANNELS];
++	u32 base;
++	u32 max_current_ua;
++	u8 revision[4];
++	u8 type;
++	u8 subtype;
++	u8 max_current_code;
++	u8 active_mask;
++	u8 latched_fault;
++	bool locked_out;
++	bool stopping;
++};
++
++static unsigned int pmi8950_torch_strobe_bit(unsigned int channel)
++{
++	return BIT(7 - channel);
++}
++
++static unsigned int pmi8950_torch_current_reg(unsigned int channel)
++{
++	return channel ? PMI8950_FLASH_LED1_CURRENT_REG :
++			 PMI8950_FLASH_LED0_CURRENT_REG;
++}
++
++static unsigned int pmi8950_torch_headroom_reg(unsigned int channel)
++{
++	return channel ? PMI8950_FLASH_HEADROOM_SENSE1_REG :
++			 PMI8950_FLASH_HEADROOM_SENSE0_REG;
++}
++
++static unsigned int pmi8950_torch_level_to_code(unsigned int level)
++{
++	return level - 1;
++}
++
++static void pmi8950_torch_keep_first_error(int *first_error, int error)
++{
++	if (!*first_error && error)
++		*first_error = error;
++}
++
++static int pmi8950_torch_update_bits(struct pmi8950_torch *torch,
++				     unsigned int reg, unsigned int mask,
++				     unsigned int value)
++{
++	return regmap_update_bits(torch->regmap, torch->base + reg, mask, value);
++}
++
++static int pmi8950_torch_read_fault_locked(struct pmi8950_torch *torch,
++					   unsigned int *fault)
++{
++	int ret;
++
++	ret = regmap_read(torch->regmap,
++			  torch->base + PMI8950_FLASH_FAULT_STATUS_REG,
++			  fault);
++	if (ret) {
++		torch->locked_out = true;
++		return ret;
++	}
++
++	torch->latched_fault |= *fault;
++	if (*fault)
++		torch->locked_out = true;
++
++	return 0;
++}
++
++/*
++ * Make every off attempt best-effort: a failed write must not prevent the
++ * remaining independent disable operations from being tried.
++ */
++static int pmi8950_torch_force_off_locked(struct pmi8950_torch *torch)
++{
++	struct led_classdev *cdev = &torch->mc_cdev.led_cdev;
++	unsigned int fault = 0;
++	int first_error = 0;
++	int ret;
++	int i;
++
++	ret = pmi8950_torch_update_bits(torch, PMI8950_FLASH_STROBE_REG,
++					PMI8950_FLASH_STROBE_MASK, 0);
++	pmi8950_torch_keep_first_error(&first_error, ret);
++	usleep_range(PMI8950_TORCH_RAMP_DOWN_MIN_US,
++		     PMI8950_TORCH_RAMP_DOWN_MAX_US);
++
++	for (i = 0; i < PMI8950_TORCH_CHANNELS; i++) {
++		ret = pmi8950_torch_update_bits(torch,
++						pmi8950_torch_headroom_reg(i),
++						PMI8950_FLASH_HEADROOM_SENSE_MASK,
++						PMI8950_FLASH_HEADROOM_SENSE_DISABLED);
++		pmi8950_torch_keep_first_error(&first_error, ret);
++
++		ret = pmi8950_torch_update_bits(torch,
++						pmi8950_torch_current_reg(i),
++						PMI8950_FLASH_CURRENT_MASK, 0);
++		pmi8950_torch_keep_first_error(&first_error, ret);
++		torch->subled[i].brightness = LED_OFF;
++	}
++
++	torch->active_mask = 0;
++	cdev->brightness = LED_OFF;
++
++	ret = regmap_write(torch->regmap,
++			   torch->base + PMI8950_FLASH_SECURE_ACCESS_REG,
++			   PMI8950_FLASH_SECURE_UNLOCK);
++	pmi8950_torch_keep_first_error(&first_error, ret);
++	ret = pmi8950_torch_update_bits(torch, PMI8950_FLASH_TORCH_MODE_REG,
++					PMI8950_FLASH_TORCH_MODE_MASK,
++					PMI8950_FLASH_TORCH_DISABLED);
++	pmi8950_torch_keep_first_error(&first_error, ret);
++
++	ret = pmi8950_torch_update_bits(torch, PMI8950_FLASH_MODULE_ENABLE_REG,
++					PMI8950_FLASH_MODULE_ENABLE_MASK,
++					PMI8950_FLASH_MODULE_DISABLED);
++	pmi8950_torch_keep_first_error(&first_error, ret);
++	ret = pmi8950_torch_update_bits(torch, PMI8950_FLASH_MAX_CURRENT_REG,
++					PMI8950_FLASH_CURRENT_MASK,
++					PMI8950_FLASH_IDLE_MAX_CODE);
++	pmi8950_torch_keep_first_error(&first_error, ret);
++
++	ret = pmi8950_torch_read_fault_locked(torch, &fault);
++	pmi8950_torch_keep_first_error(&first_error, ret);
++	if (fault)
++		dev_err(torch->dev, "flash fault after force-off: %#02x\n", fault);
++
++	if (first_error)
++		torch->locked_out = true;
++
++	return first_error;
++}
++
++static int pmi8950_torch_write_protections_locked(struct pmi8950_torch *torch)
++{
++	int ret;
++
++	ret = pmi8950_torch_update_bits(torch, PMI8950_FLASH_TIMER_CTRL_REG,
++					PMI8950_FLASH_TIMER_CTRL_MASK, 0);
++	if (ret)
++		return ret;
++
++	ret = pmi8950_torch_update_bits(torch, PMI8950_FLASH_HEADROOM_REG,
++					PMI8950_FLASH_HEADROOM_MASK,
++					PMI8950_FLASH_HEADROOM_500MV);
++	if (ret)
++		return ret;
++
++	ret = pmi8950_torch_update_bits(torch, PMI8950_FLASH_STARTUP_DELAY_REG,
++					PMI8950_FLASH_STARTUP_DELAY_MASK,
++					PMI8950_FLASH_STARTUP_128US);
++	if (ret)
++		return ret;
++
++	ret = pmi8950_torch_update_bits(torch, PMI8950_FLASH_CLAMP_CURRENT_REG,
++					PMI8950_FLASH_CURRENT_MASK,
++					PMI8950_FLASH_CLAMP_200MA_CODE);
++	if (ret)
++		return ret;
++
++	ret = pmi8950_torch_update_bits(torch, PMI8950_FLASH_VREG_OK_FORCE_REG,
++					PMI8950_FLASH_VREG_OK_FORCE_MASK,
++					PMI8950_FLASH_VREG_OK_HW);
++	if (ret)
++		return ret;
++
++	ret = pmi8950_torch_update_bits(torch, PMI8950_FLASH_FAULT_DETECT_REG,
++					PMI8950_FLASH_FAULT_DETECT_MASK,
++					PMI8950_FLASH_FAULT_DETECT_ENABLED);
++	if (ret)
++		return ret;
++
++	ret = pmi8950_torch_update_bits(torch, PMI8950_FLASH_MASK_ENABLE_REG,
++					PMI8950_FLASH_MASK_ENABLE_MASK,
++					PMI8950_FLASH_MASK2_ENABLED);
++	if (ret)
++		return ret;
++
++	ret = pmi8950_torch_update_bits(torch, PMI8950_FLASH_THERMAL_DERATE_REG,
++					PMI8950_FLASH_THERMAL_DERATE_MASK,
++					PMI8950_FLASH_THERMAL_DERATE_STOCK);
++	if (ret)
++		return ret;
++
++	ret = pmi8950_torch_update_bits(torch, PMI8950_FLASH_CURRENT_RAMP_REG,
++					PMI8950_FLASH_CURRENT_RAMP_MASK,
++					PMI8950_FLASH_CURRENT_RAMP_6P7US);
++	if (ret)
++		return ret;
++
++	return pmi8950_torch_update_bits(torch, PMI8950_FLASH_VPH_DROOP_REG,
++					 PMI8950_FLASH_VPH_DROOP_MASK,
++					 PMI8950_FLASH_VPH_DROOP_3V_10US);
++}
++
++static int pmi8950_torch_write_level_locked(struct pmi8950_torch *torch,
++					    unsigned int channel,
++					    unsigned int level)
++{
++	unsigned int code;
++
++	if (!level || level > PMI8950_TORCH_MAX_BRIGHTNESS)
++		return -EINVAL;
++
++	code = pmi8950_torch_level_to_code(level);
++	if (code > torch->max_current_code)
++		return -EINVAL;
++
++	return pmi8950_torch_update_bits(torch,
++					 pmi8950_torch_current_reg(channel),
++					 PMI8950_FLASH_CURRENT_MASK, code);
++}
++
++static int pmi8950_torch_apply_locked(struct pmi8950_torch *torch,
++				      enum led_brightness brightness)
++{
++	struct led_classdev_mc *mc_cdev = &torch->mc_cdev;
++	struct led_classdev *cdev = &mc_cdev->led_cdev;
++	unsigned int desired_strobe = 0;
++	unsigned int desired_mask = 0;
++	unsigned int removed_mask;
++	unsigned int fault;
++	int off_ret;
++	int ret;
++	int i;
++
++	if (torch->stopping)
++		return -ESHUTDOWN;
++	if (torch->locked_out)
++		return -EIO;
++	if (brightness > cdev->max_brightness)
++		return -EINVAL;
++	if (brightness == LED_OFF)
++		return pmi8950_torch_force_off_locked(torch);
++
++	for (i = 0; i < PMI8950_TORCH_CHANNELS; i++)
++		mc_cdev->subled_info[i].intensity =
++			min(mc_cdev->subled_info[i].intensity,
++			    cdev->max_brightness);
++
++	ret = led_mc_calc_color_components(mc_cdev, brightness);
++	if (ret)
++		goto fail_closed;
++
++	for (i = 0; i < PMI8950_TORCH_CHANNELS; i++) {
++		if (!mc_cdev->subled_info[i].brightness)
++			continue;
++		desired_mask |= BIT(i);
++		desired_strobe |= pmi8950_torch_strobe_bit(i);
++	}
++
++	if (!desired_mask)
++		return pmi8950_torch_force_off_locked(torch);
++
++	ret = pmi8950_torch_read_fault_locked(torch, &fault);
++	if (ret)
++		goto fail_closed;
++	if (fault) {
++		dev_err(torch->dev, "refusing enable with flash fault %#02x\n",
++			fault);
++		ret = -EIO;
++		goto fail_closed;
++	}
++
++	if (!torch->active_mask) {
++		ret = pmi8950_torch_write_protections_locked(torch);
++		if (ret)
++			goto fail_closed;
++
++		ret = regmap_write(torch->regmap,
++				   torch->base + PMI8950_FLASH_SECURE_ACCESS_REG,
++				   PMI8950_FLASH_SECURE_UNLOCK);
++		if (ret)
++			goto fail_closed;
++		ret = pmi8950_torch_update_bits(torch,
++						PMI8950_FLASH_TORCH_MODE_REG,
++						PMI8950_FLASH_TORCH_MODE_MASK,
++						PMI8950_FLASH_TORCH_ENABLED);
++		if (ret)
++			goto fail_closed;
++	}
++
++	for (i = 0; i < PMI8950_TORCH_CHANNELS; i++) {
++		if (!(desired_mask & BIT(i)))
++			continue;
++		ret = pmi8950_torch_write_level_locked(torch, i,
++						       mc_cdev->subled_info[i].brightness);
++		if (ret)
++			goto fail_closed;
++	}
++
++	if (!torch->active_mask) {
++		ret = pmi8950_torch_update_bits(torch,
++						PMI8950_FLASH_MAX_CURRENT_REG,
++						PMI8950_FLASH_CURRENT_MASK,
++						PMI8950_FLASH_TORCH_MAX_CODE);
++		if (ret)
++			goto fail_closed;
++
++		ret = pmi8950_torch_update_bits(torch,
++						PMI8950_FLASH_MODULE_ENABLE_REG,
++						PMI8950_FLASH_MODULE_ENABLE_MASK,
++						PMI8950_FLASH_MODULE_ENABLED);
++		if (ret)
++			goto fail_closed;
++	}
++
++	for (i = 0; i < PMI8950_TORCH_CHANNELS; i++) {
++		if (!(desired_mask & BIT(i)))
++			continue;
++		ret = pmi8950_torch_update_bits(torch,
++						pmi8950_torch_headroom_reg(i),
++						PMI8950_FLASH_HEADROOM_SENSE_MASK,
++						PMI8950_FLASH_HEADROOM_SENSE_ENABLED);
++		if (ret)
++			goto fail_closed;
++	}
++
++	removed_mask = torch->active_mask & ~desired_mask;
++	ret = pmi8950_torch_update_bits(torch, PMI8950_FLASH_STROBE_REG,
++					PMI8950_FLASH_STROBE_MASK,
++					desired_strobe);
++	if (ret)
++		goto fail_closed;
++
++	if (removed_mask)
++		usleep_range(PMI8950_TORCH_RAMP_DOWN_MIN_US,
++			     PMI8950_TORCH_RAMP_DOWN_MAX_US);
++	for (i = 0; i < PMI8950_TORCH_CHANNELS; i++) {
++		if (!(removed_mask & BIT(i)))
++			continue;
++		ret = pmi8950_torch_update_bits(torch,
++						pmi8950_torch_headroom_reg(i),
++						PMI8950_FLASH_HEADROOM_SENSE_MASK,
++						PMI8950_FLASH_HEADROOM_SENSE_DISABLED);
++		if (ret)
++			goto fail_closed;
++		ret = pmi8950_torch_update_bits(torch,
++						pmi8950_torch_current_reg(i),
++						PMI8950_FLASH_CURRENT_MASK, 0);
++		if (ret)
++			goto fail_closed;
++	}
++
++	torch->active_mask = desired_mask;
++	cdev->brightness = brightness;
++
++	return 0;
++
++fail_closed:
++	torch->locked_out = true;
++	off_ret = pmi8950_torch_force_off_locked(torch);
++	return ret ?: off_ret;
++}
++
++static enum led_brightness
++pmi8950_torch_brightness_get(struct led_classdev *cdev)
++{
++	struct led_classdev_mc *mc_cdev = lcdev_to_mccdev(cdev);
++	struct pmi8950_torch *torch =
++		container_of(mc_cdev, struct pmi8950_torch, mc_cdev);
++
++	return READ_ONCE(torch->active_mask) ? READ_ONCE(cdev->brightness) :
++		LED_OFF;
++}
++
++static int pmi8950_torch_brightness_set(struct led_classdev *cdev,
++					enum led_brightness brightness)
++{
++	struct led_classdev_mc *mc_cdev = lcdev_to_mccdev(cdev);
++	struct pmi8950_torch *torch =
++		container_of(mc_cdev, struct pmi8950_torch, mc_cdev);
++	int ret;
++
++	mutex_lock(&torch->lock);
++	ret = pmi8950_torch_apply_locked(torch, brightness);
++	mutex_unlock(&torch->lock);
++
++	return ret;
++}
++
++static ssize_t identity_show(struct device *dev,
++			     struct device_attribute *attr, char *buf)
++{
++	struct pmi8950_torch *torch = dev_get_drvdata(dev);
++
++	return sysfs_emit(buf,
++		"base=%#06x revision=%02x.%02x.%02x.%02x type=%#02x subtype=%#02x\n",
++		torch->base, torch->revision[0], torch->revision[1],
++		torch->revision[2], torch->revision[3], torch->type,
++		torch->subtype);
++}
++static DEVICE_ATTR_RO(identity);
++
++static ssize_t active_channels_show(struct device *dev,
++				    struct device_attribute *attr, char *buf)
++{
++	struct pmi8950_torch *torch = dev_get_drvdata(dev);
++	unsigned int active;
++
++	mutex_lock(&torch->lock);
++	active = torch->active_mask;
++	mutex_unlock(&torch->lock);
++
++	return sysfs_emit(buf, "%#02x\n", active);
++}
++static DEVICE_ATTR_RO(active_channels);
++
++static ssize_t fault_status_show(struct device *dev,
++				 struct device_attribute *attr, char *buf)
++{
++	struct pmi8950_torch *torch = dev_get_drvdata(dev);
++	unsigned int fault = 0;
++	unsigned int latched;
++	unsigned int locked_out;
++	int off_ret = 0;
++	int ret;
++
++	mutex_lock(&torch->lock);
++	ret = pmi8950_torch_read_fault_locked(torch, &fault);
++	if ((ret || fault) && torch->active_mask)
++		off_ret = pmi8950_torch_force_off_locked(torch);
++	latched = torch->latched_fault;
++	locked_out = torch->locked_out;
++	mutex_unlock(&torch->lock);
++	if (ret)
++		return ret;
++	if (off_ret)
++		return off_ret;
++
++	return sysfs_emit(buf, "live=%#02x latched=%#02x locked_out=%u\n",
++			  fault, latched, locked_out);
++}
++static DEVICE_ATTR_RO(fault_status);
++
++static ssize_t channel_map_show(struct device *dev,
++				struct device_attribute *attr, char *buf)
++{
++	return sysfs_emit(buf, "0=cool 1=warm\n");
++}
++static DEVICE_ATTR_RO(channel_map);
++
++static ssize_t torch_max_microamp_show(struct device *dev,
++				       struct device_attribute *attr,
++				       char *buf)
++{
++	struct pmi8950_torch *torch = dev_get_drvdata(dev);
++
++	return sysfs_emit(buf, "%u\n", torch->max_current_ua);
++}
++static DEVICE_ATTR_RO(torch_max_microamp);
++
++static struct attribute *pmi8950_torch_attrs[] = {
++	&dev_attr_identity.attr,
++	&dev_attr_active_channels.attr,
++	&dev_attr_fault_status.attr,
++	&dev_attr_channel_map.attr,
++	&dev_attr_torch_max_microamp.attr,
++	NULL,
++};
++
++static const struct attribute_group pmi8950_torch_group = {
++	.attrs = pmi8950_torch_attrs,
++};
++
++static int pmi8950_torch_quiesce(struct pmi8950_torch *torch, bool stopping)
++{
++	int ret;
++
++	mutex_lock(&torch->lock);
++	if (stopping)
++		torch->stopping = true;
++	ret = pmi8950_torch_force_off_locked(torch);
++	mutex_unlock(&torch->lock);
++
++	return ret;
++}
++
++static int pmi8950_torch_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct led_classdev *cdev;
++	struct pmi8950_torch *torch;
++	unsigned int value;
++	int ret;
++	int i;
++
++	torch = devm_kzalloc(dev, sizeof(*torch), GFP_KERNEL);
++	if (!torch)
++		return -ENOMEM;
++
++	torch->dev = dev;
++	torch->regmap = dev_get_regmap(dev->parent, NULL);
++	if (!torch->regmap)
++		return dev_err_probe(dev, -ENODEV, "parent regmap unavailable\n");
++
++	ret = device_property_read_u32(dev, "reg", &torch->base);
++	if (ret)
++		return dev_err_probe(dev, ret, "missing register base\n");
++	if (torch->base > U16_MAX - PMI8950_FLASH_TORCH_MODE_REG)
++		return dev_err_probe(dev, -EINVAL, "invalid register base %#x\n",
++				     torch->base);
++
++	ret = device_property_read_u32(dev, "qcom,torch-max-microamp",
++				       &torch->max_current_ua);
++	if (ret)
++		return dev_err_probe(dev, ret, "missing torch current cap\n");
++	if (torch->max_current_ua != PMI8950_TORCH_VINCE_MAX_CURRENT_UA)
++		return dev_err_probe(dev, -EINVAL,
++				     "unsupported torch current cap %u uA\n",
++				     torch->max_current_ua);
++	torch->max_current_code = torch->max_current_ua /
++		PMI8950_TORCH_CURRENT_STEP_UA - 1;
++	if (torch->max_current_code != PMI8950_TORCH_VINCE_MAX_CURRENT_CODE)
++		return dev_err_probe(dev, -EINVAL,
++				     "invalid torch current code %#x\n",
++				     torch->max_current_code);
++
++	for (i = 0; i < ARRAY_SIZE(torch->revision); i++) {
++		ret = regmap_read(torch->regmap,
++				  torch->base + PMI8950_FLASH_REVISION1_REG + i,
++				  &value);
++		if (ret)
++			return dev_err_probe(dev, ret,
++					     "failed to read revision byte %d\n", i);
++		torch->revision[i] = value;
++	}
++
++	ret = regmap_read(torch->regmap,
++			  torch->base + PMI8950_FLASH_TYPE_REG, &value);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to read type\n");
++	torch->type = value;
++	if (torch->type != PMI8950_FLASH_TYPE)
++		return dev_err_probe(dev, -ENODEV,
++				     "unexpected flash type %#02x\n", torch->type);
++
++	ret = regmap_read(torch->regmap,
++			  torch->base + PMI8950_FLASH_SUBTYPE_REG, &value);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to read subtype\n");
++	torch->subtype = value;
++	if (torch->subtype != PMI8950_FLASH_SUBTYPE_DUAL)
++		return dev_err_probe(dev, -ENODEV,
++				     "unsupported flash subtype %#02x\n",
++				     torch->subtype);
++
++	ret = devm_mutex_init(dev, &torch->lock);
++	if (ret)
++		return ret;
++
++	platform_set_drvdata(pdev, torch);
++
++	mutex_lock(&torch->lock);
++	ret = pmi8950_torch_force_off_locked(torch);
++	mutex_unlock(&torch->lock);
++	if (ret)
++		return dev_err_probe(dev, ret, "initial force-off failed\n");
++	if (torch->locked_out)
++		return dev_err_probe(dev, -EIO,
++				     "flash fault %#02x at probe\n",
++				     torch->latched_fault);
++
++	ret = devm_device_add_group(dev, &pmi8950_torch_group);
++	if (ret)
++		return ret;
++
++	for (i = 0; i < PMI8950_TORCH_CHANNELS; i++) {
++		torch->subled[i].color_index = LED_COLOR_ID_WHITE;
++		torch->subled[i].intensity = PMI8950_TORCH_MAX_BRIGHTNESS;
++		torch->subled[i].channel = i;
++	}
++
++	torch->mc_cdev.num_colors = PMI8950_TORCH_CHANNELS;
++	torch->mc_cdev.subled_info = torch->subled;
++	cdev = &torch->mc_cdev.led_cdev;
++	cdev->name = "white:torch";
++	cdev->brightness = LED_OFF;
++	cdev->max_brightness = PMI8950_TORCH_MAX_BRIGHTNESS;
++	cdev->color = LED_COLOR_ID_WHITE;
++	cdev->brightness_set_blocking = pmi8950_torch_brightness_set;
++	cdev->brightness_get = pmi8950_torch_brightness_get;
++	cdev->flags = LED_REJECT_NAME_CONFLICT;
++
++	ret = devm_led_classdev_multicolor_register(dev, &torch->mc_cdev);
++	if (ret)
++		return dev_err_probe(dev, ret,
++				     "failed to register multicolor white torch\n");
++
++	dev_info(dev,
++		 "PMI8950 flash rev %02x.%02x.%02x.%02x, cool/warm white torch with %u levels capped at %u uA per channel\n",
++		 torch->revision[0], torch->revision[1], torch->revision[2],
++		 torch->revision[3], cdev->max_brightness,
++		 torch->max_current_ua);
++
++	return 0;
++}
++
++static void pmi8950_torch_remove(struct platform_device *pdev)
++{
++	struct pmi8950_torch *torch = platform_get_drvdata(pdev);
++	int ret;
++
++	ret = pmi8950_torch_quiesce(torch, true);
++	if (ret)
++		dev_err(torch->dev, "remove force-off failed: %d\n", ret);
++}
++
++static void pmi8950_torch_shutdown(struct platform_device *pdev)
++{
++	struct pmi8950_torch *torch = platform_get_drvdata(pdev);
++	int ret;
++
++	ret = pmi8950_torch_quiesce(torch, true);
++	if (ret)
++		dev_err(torch->dev, "shutdown force-off failed: %d\n", ret);
++}
++
++static int pmi8950_torch_suspend(struct device *dev)
++{
++	struct pmi8950_torch *torch = dev_get_drvdata(dev);
++
++	return pmi8950_torch_quiesce(torch, false);
++}
++
++static DEFINE_SIMPLE_DEV_PM_OPS(pmi8950_torch_pm_ops,
++				pmi8950_torch_suspend, NULL);
++
++static const struct of_device_id pmi8950_torch_of_match[] = {
++	{ .compatible = "qcom,pmi8950-flash-led" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, pmi8950_torch_of_match);
++
++static struct platform_driver pmi8950_torch_driver = {
++	.probe = pmi8950_torch_probe,
++	.remove = pmi8950_torch_remove,
++	.shutdown = pmi8950_torch_shutdown,
++	.driver = {
++		.name = "leds-qcom-pmi8950-torch",
++		.of_match_table = pmi8950_torch_of_match,
++		.pm = pm_sleep_ptr(&pmi8950_torch_pm_ops),
++	},
++};
++module_platform_driver(pmi8950_torch_driver);
++
++MODULE_DESCRIPTION("Qualcomm PMI8950 cool/warm continuous torch driver");
++MODULE_LICENSE("GPL");

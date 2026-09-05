@@ -1,0 +1,41 @@
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Subject: [PATCH] linux-postmarketos-qcom-msm8953: package Vince torch r7
+
+Package the physically tested cumulative kernel with the PMI8950 dual-color
+torch enabled and the multicolor LED core built in.
+
+---
+diff --git a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+index 162cf96..c4e98c1 100644
+--- a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
++++ b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+@@ -3,7 +3,7 @@ maintainer="Barnabas Czeman <barnabas.czeman@postmarketos.org>"
+ _flavor="postmarketos-qcom-msm8953"
+ pkgname=linux-$_flavor
+ pkgver=7.0.9
+-pkgrel=4
++pkgrel=7
+ pkgdesc="Close to mainline linux kernel for Qualcomm Snapdragon MSM8953"
+ arch="aarch64"
+ _carch="arm64"
+diff --git a/device/community/linux-postmarketos-qcom-msm8953/config-postmarketos-qcom-msm8953.aarch64 b/device/community/linux-postmarketos-qcom-msm8953/config-postmarketos-qcom-msm8953.aarch64
+index 0d2a8ed..ca97d5b 100644
+--- a/device/community/linux-postmarketos-qcom-msm8953/config-postmarketos-qcom-msm8953.aarch64
++++ b/device/community/linux-postmarketos-qcom-msm8953/config-postmarketos-qcom-msm8953.aarch64
+@@ -5263,7 +5263,7 @@ CONFIG_SCSI_UFS_QCOM=m
+ CONFIG_NEW_LEDS=y
+ CONFIG_LEDS_CLASS=y
+ CONFIG_LEDS_CLASS_FLASH=m
+-CONFIG_LEDS_CLASS_MULTICOLOR=m
++CONFIG_LEDS_CLASS_MULTICOLOR=y
+ # CONFIG_LEDS_BRIGHTNESS_HW_CHANGED is not set
+ 
+ #
+@@ -5293,6 +5293,7 @@ CONFIG_LEDS_ATC=m
+ # CONFIG_LEDS_PCA955X is not set
+ # CONFIG_LEDS_PCA963X is not set
+ # CONFIG_LEDS_PCA995X is not set
++CONFIG_LEDS_QCOM_PMI8950_TORCH=y
+ # CONFIG_LEDS_DAC124S085 is not set
+ # CONFIG_LEDS_PWM is not set
+ # CONFIG_LEDS_REGULATOR is not set

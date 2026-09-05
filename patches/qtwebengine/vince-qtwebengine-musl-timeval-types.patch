@@ -1,0 +1,13 @@
+diff --git a/src/3rdparty/chromium/media/gpu/v4l2/v4l2_utils.cc b/src/3rdparty/chromium/media/gpu/v4l2/v4l2_utils.cc
+--- a/src/3rdparty/chromium/media/gpu/v4l2/v4l2_utils.cc
++++ b/src/3rdparty/chromium/media/gpu/v4l2/v4l2_utils.cc
+@@ -563,7 +563,7 @@ struct timeval TimeDeltaToTimeVal(base::TimeDelta time_delta) {
+   const int64_t time_delta_linear = time_delta.InMicroseconds();
+   constexpr int64_t kMicrosecondsPerSecond = 1000 * 1000;
+-  return {.tv_sec = base::checked_cast<__time_t>(time_delta_linear /
++  return {.tv_sec = base::checked_cast<time_t>(time_delta_linear /
+                                                  kMicrosecondsPerSecond),
+-          .tv_usec = base::checked_cast<__suseconds_t>(time_delta_linear %
++          .tv_usec = base::checked_cast<suseconds_t>(time_delta_linear %
+                                                        kMicrosecondsPerSecond)};
+ }

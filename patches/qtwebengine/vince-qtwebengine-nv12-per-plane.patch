@@ -1,0 +1,46 @@
+From 1a9d852c8cd1a2da7acd79b788c4001983bc74cd Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sat, 5 Sep 2026 15:50:00 +0300
+Subject: [PATCH] media/gpu: prefer per-plane video SharedImages on Linux
+
+Upstream-Status: Inappropriate [Vince diagnostic experiment]
+
+Qt WebEngine 6.11.1 on the Adreno 506/freedreno Vince target successfully
+decodes NV12 through the stateful V4L2 backend, but its first decoded frame
+fails SharedImage creation with ExtSamplerOn and loses the GPU context.
+
+Keep the established external-sampler preference on ChromeOS. On desktop
+Linux, retain the same platform NV12 buffer and SharedImage usages but expose
+the multiplanar format without the external-sampler preference. Log the exact
+candidate format at VLOG level 1 so the one-variable experiment can prove
+whether the request reaches SharedImage creation as ExtSamplerOff.
+---
+ .../gpu/chromeos/mailbox_video_frame_converter.cc | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/src/3rdparty/chromium/media/gpu/chromeos/mailbox_video_frame_converter.cc b/src/3rdparty/chromium/media/gpu/chromeos/mailbox_video_frame_converter.cc
+index 0a98f4f7e2..e9754753ac 100644
+--- a/src/3rdparty/chromium/media/gpu/chromeos/mailbox_video_frame_converter.cc
++++ b/src/3rdparty/chromium/media/gpu/chromeos/mailbox_video_frame_converter.cc
+@@ -321,13 +321,16 @@ bool MailboxVideoFrameConverter::CreateSharedImage(
+                            VideoPixelFormatToString(origin_frame->format()));
+     return false;
+   }
+-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
+-  // If format is true multiplanar format, we prefer external sampler on
+-  // ChromeOS and Linux.
++#if BUILDFLAG(IS_CHROMEOS)
++  // ChromeOS prefers an external sampler for true multiplanar formats.
+   if (si_format->is_multi_plane()) {
+     si_format->SetPrefersExternalSampler();
+   }
+ #endif
++  DVLOGF(1) << "SharedImage candidate format=" << si_format->ToString()
++            << ", multi_plane=" << si_format->is_multi_plane()
++            << ", prefers_external_sampler="
++            << si_format->PrefersExternalSampler();
+ 
+   auto gpu_memory_buffer_handle = origin_frame->CreateGpuMemoryBufferHandle();
+   DCHECK(!gpu_memory_buffer_handle.is_null());
+-- 
+2.43.0

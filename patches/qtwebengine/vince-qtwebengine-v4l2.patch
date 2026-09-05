@@ -1,0 +1,44 @@
+diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
+index 7ec30d7..089482a 100644
+--- a/src/core/CMakeLists.txt
++++ b/src/core/CMakeLists.txt
+@@ -535,6 +535,10 @@ function(addSyncTargets target arch config)
+                 ARGS use_vaapi
+                 CONDITION QT_FEATURE_webengine_vaapi
+             )
++            extend_gn_list(gnArgArg
++                ARGS use_v4l2_codec
++                CONDITION QT_FEATURE_webengine_v4l2_codec
++            )
+             extend_gn_list(gnArgArg
+                 ARGS ozone_platform_x11 use_xkbcommon
+                 CONDITION QT_FEATURE_webengine_ozone_x11
+diff --git a/src/core/api/configure.cmake b/src/core/api/configure.cmake
+index 107cded..aa0fab3 100644
+--- a/src/core/api/configure.cmake
++++ b/src/core/api/configure.cmake
+@@ -172,6 +172,13 @@ qt_feature("webengine-vulkan" PRIVATE
+     CONDITION QT_FEATURE_vulkan
+     DISABLE MACOS
+ )
++qt_feature("webengine-v4l2-codec" PRIVATE
++    SECTION "WebEngine"
++    LABEL "V4L2 codec support"
++    PURPOSE "Enables V4L2 hardware video decoding on Linux"
++    AUTODETECT OFF
++    CONDITION LINUX
++)
+ qt_feature("webengine-vaapi" PRIVATE
+     SECTION "WebEngine"
+     LABEL "VA-API support"
+@@ -217,6 +224,10 @@ qt_configure_add_summary_entry(
+     ARGS "webengine-vulkan"
+     CONDITION QT_FEATURE_vulkan
+ )
++qt_configure_add_summary_entry(
++    ARGS "webengine-v4l2-codec"
++    CONDITION LINUX
++)
+ qt_configure_add_summary_entry(
+     ARGS "webengine-vaapi"
+     CONDITION LINUX

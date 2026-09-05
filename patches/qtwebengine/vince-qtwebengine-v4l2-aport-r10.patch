@@ -1,0 +1,394 @@
+diff --git a/community/qt6-qtwebengine/APKBUILD b/community/qt6-qtwebengine/APKBUILD
+index fd65d34ecba..b33e91abbb7 100644
+--- a/community/qt6-qtwebengine/APKBUILD
++++ b/community/qt6-qtwebengine/APKBUILD
+@@ -3,7 +3,7 @@
+ maintainer="Bart Ribbers <bribbers@disroot.org>"
+ pkgname=qt6-qtwebengine
+ pkgver=6.11.1
+-pkgrel=3
++pkgrel=10
+ # latest commit of 140-based branch of qtwebengine-chromium
+ _chromium_commit="37b6aeaa3ef9bf7e1901aa02a317a2707557709d"
+ pkgdesc="Provides support for web applications using the Chromium browser project"
+@@ -59,6 +59,12 @@ source="$pkgname-$pkgver.tar.gz::https://github.com/qt/qtwebengine/archive/refs/
+ 	0002-temp-failure-retry.patch
+ 	0003-qt-musl-mallinfo.patch
+ 	0004-qt-musl-resolve.patch
++	vince-qtwebengine-v4l2.patch
++	vince-qtwebengine-h264-access-units.patch
++	vince-qtwebengine-nv12-per-plane.patch
++	vince-qtwebengine-multiplanar-native-pixmap.patch
++	vince-qtwebengine-mt21-neon-types.patch
++	vince-qtwebengine-musl-timeval-types.patch
+ 	0005-qtwebengine-missing-include.patch
+ 	0006-no-execinfo.patch
+ 	0007-musl-sandbox.patch
+@@ -788,6 +794,7 @@ build() {
+ 	export CXXFLAGS="$CXXFLAGS -D_LARGEFILE64_SOURCE -Wno-builtin-macro-redefined -Wno-deprecated-declarations"
+ 
+ 	export NODEJS_EXECUTABLE="/usr/bin/node"
++	export NINJAFLAGS="-j4"
+ 
+ 	case "$CARCH" in
+ 		aarch64) _neon_enabled="-DQT_FEATURE_webengine_arm64_udot_support=OFF"
+@@ -814,12 +821,14 @@ build() {
+ 		-DQT_FEATURE_webengine_system_minizip=ON \
+ 		-DQT_FEATURE_webengine_system_opus=ON \
+ 		-DQT_FEATURE_webengine_system_pulseaudio=ON \
++		-DQT_FEATURE_webengine_vaapi=OFF \
++		-DQT_FEATURE_webengine_v4l2_codec=ON \
+ 		-DQT_FEATURE_webengine_system_zlib=ON \
+ 		-DQT_FEATURE_webengine_proprietary_codecs=ON \
+ 		-DQT_FEATURE_webengine_kerberos=ON \
+ 		-DQT_FEATURE_webengine_webrtc_pipewire=ON \
+ 		$_neon_enabled
+-	cmake --build build
++	cmake --build build --parallel 4
+ }
+ 
+ package() {
+@@ -839,6 +848,12 @@ fb81c66253f497a7d2c1468653683a490591fc6351eeda19120d3420a0ef852059fad1002aebc5f9
+ 7b6ed37975c55e5ebc20b9a6207044b6f86102d69caa6fdd457078a7ae242026d3de5537651d3d86497ba18ddd1e97523aa082da4dff703a8a4f618bccd4af57  0002-temp-failure-retry.patch
+ a894539990d28b6e1c94b3555fda1b17f0e6d7a61c15fdac6793f0ac8fd86f421c1d73c408f93cd8c70cd9bf7b3d3f85e89d190e1af69c67d233e248a7aa15a7  0003-qt-musl-mallinfo.patch
+ 7751e3a2924f2892384d7a7daf3a9a6770cd873570181854de8fcfb8b1a8430808ad8bf2b6218fa89321ce5446f4e076fea66ca1d2790daf862d016a78b38e51  0004-qt-musl-resolve.patch
++de8741c4c6cb82f7ec386fda815ece6b13351be76fc218e55260c6fe69ce3ac6af087f3b4285e301b2d8134ff3e5b96c95252d9dc3b6b76a4ee2cdb4c60a7f2f  vince-qtwebengine-v4l2.patch
++e75eab30fb61b4680683ef7b7eebdc1d84714b9f82692a12536639627a63aecede8d9202b4a2f5396c5736acffee53112068dc9284acdc4135b152d7a91c1dd8  vince-qtwebengine-h264-access-units.patch
++6679952edab78657a9d9973c8eb54119219897960c26eb62b1b5e7d30a5d31b05602a1e5f5af3c335ae0034ec16ef635f0966c01a5c0eb28a6d37fc39639299f  vince-qtwebengine-nv12-per-plane.patch
++65dd7e09c3ac452fcef9b0cbf9a807fde55a21f7263595154c78077b48948027af5d5046e29187c63d04872425222f49f0ad237d321a4b2d543ddff3d200e517  vince-qtwebengine-multiplanar-native-pixmap.patch
++dbc1fe3d5437de3a7faf7ae88f76dc5e257e20dcdcf92e9782aada214cdbcbf767558243d44c5847b8345145832ab8494a7661dfd705a425428514276b7049b9  vince-qtwebengine-mt21-neon-types.patch
++03c596f80ad26e01b82139ca1a2591f1760f621efc0e094d160d32a1a342f9a8595077d20a09d0af026c35838d4c90694cd911018581e326dce8b11b0d2edf79  vince-qtwebengine-musl-timeval-types.patch
+ 4fb5989b4984216f365f541cd15352e20d4504eb41c3ca4d10c1750a8ae9256d50fe5c43229f39517e8da34e885bea3708db281704e2cf8ecfbce83f81817c74  0005-qtwebengine-missing-include.patch
+ 45754d7be2a7806a0bef157bd5b0f5b2bed3fa7b43e721bf331cc58f0d595c93c595734aeded2fc717d6ae7bd64849ecaaead0abb455b50147f5955c978a066d  0006-no-execinfo.patch
+ 852c1620ae18b398ff47286f07dfc1ae9683bd4b94733029e01fe609116daadf503ff16eed86fa072dc306c0162bf6fe567452777cd8f61bcc033dc1fc2f59e9  0007-musl-sandbox.patch
+diff --git a/community/qt6-qtwebengine/vince-qtwebengine-h264-access-units.patch b/community/qt6-qtwebengine/vince-qtwebengine-h264-access-units.patch
+new file mode 100644
+index 00000000000..d02db9f17a3
+--- /dev/null
++++ b/community/qt6-qtwebengine/vince-qtwebengine-h264-access-units.patch
+@@ -0,0 +1,55 @@
++From b6f490b43eebcc8aad7f9fecc01e4d59e827d547 Mon Sep 17 00:00:00 2001
++From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
++Date: Wed, 11 Jun 2025 11:07:05 +0300
++Subject: [PATCH] media/gpu/v4l2: Avoid placing incomplete H264 access units in
++ buffers
++
++Upstream-Status: Pending
++
++Don't place SPS, PPS, etc NALUs in their own separate buffers
++unconditionally, as they are not full access units by themselves,
++and may confuse the decoder.
++
++This local copy follows the six-line Chromium 142 refresh carried by TI
++meta-arago commit 30a611f56a4bd74d421e36ecddf705b956c01648. It applies to
++the Qt WebEngine Chromium 140 source used for the Vince build.
++---
++ .../media/gpu/v4l2/v4l2_stateful_video_decoder.cc   | 12 ++++++------
++ 1 file changed, 6 insertions(+), 6 deletions(-)
++
++diff --git a/src/3rdparty/chromium/media/gpu/v4l2/v4l2_stateful_video_decoder.cc b/src/3rdparty/chromium/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
++index 79c880f365..d29cef84d7 100644
++--- a/src/3rdparty/chromium/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
+++++ b/src/3rdparty/chromium/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
++@@ -1322,8 +1322,8 @@ H264FrameReassembler::FindH264FrameBoundary(const uint8_t* const data,
++           return std::nullopt;
++         }
++         previous_slice_header_.reset();
++-        return FrameBoundaryInfo{.is_whole_frame = true,
++-                                 .is_start_of_new_frame = true,
+++        return FrameBoundaryInfo{.is_whole_frame = false,
+++                                 .is_start_of_new_frame = false,
++                                  .nalu_size = nalu_size};
++       case H264NALU::kPPS:
++         result = h264_parser_.ParsePPS(&pps_id_);
++@@ -1332,8 +1332,8 @@ H264FrameReassembler::FindH264FrameBoundary(const uint8_t* const data,
++           return std::nullopt;
++         }
++         previous_slice_header_.reset();
++-        return FrameBoundaryInfo{.is_whole_frame = true,
++-                                 .is_start_of_new_frame = true,
+++        return FrameBoundaryInfo{.is_whole_frame = false,
+++                                 .is_start_of_new_frame = false,
++                                  .nalu_size = nalu_size};
++       case H264NALU::kNonIDRSlice:
++       case H264NALU::kIDRSlice: {
++@@ -1372,7 +1372,7 @@ H264FrameReassembler::FindH264FrameBoundary(const uint8_t* const data,
++         // Anything else than SPS, PPS and Non/IDRs marks a new frame boundary.
++         previous_slice_header_.reset();
++-        return FrameBoundaryInfo{.is_whole_frame = true,
++-                                 .is_start_of_new_frame = true,
+++        return FrameBoundaryInfo{.is_whole_frame = false,
+++                                 .is_start_of_new_frame = false,
++                                  .nalu_size = nalu_size};
++       default:
++         VLOGF(4) << "Unsupported NALU " << kKnownNALUNames[nalu.nal_unit_type];
+diff --git a/community/qt6-qtwebengine/vince-qtwebengine-mt21-neon-types.patch b/community/qt6-qtwebengine/vince-qtwebengine-mt21-neon-types.patch
+new file mode 100644
+index 00000000000..6e25519872d
+--- /dev/null
++++ b/community/qt6-qtwebengine/vince-qtwebengine-mt21-neon-types.patch
+@@ -0,0 +1,22 @@
++diff --git a/src/3rdparty/chromium/media/gpu/v4l2/mt21/mt21_util.h b/src/3rdparty/chromium/media/gpu/v4l2/mt21/mt21_util.h
++--- a/src/3rdparty/chromium/media/gpu/v4l2/mt21/mt21_util.h
+++++ b/src/3rdparty/chromium/media/gpu/v4l2/mt21/mt21_util.h
++@@ -595,7 +595,7 @@ __attribute__((always_inline)) uint8x16_t VectorReadGolombRiceSymbol(
++             vshlq_u32(
++                 vshlq_u32(accumulator[i], vreinterpretq_s32_u32(unary_len[i])),
++                 vsubq_s32(vreinterpretq_s32_u32(binary_len[i]),
++-                          dword_literal_32)));
+++                          vreinterpretq_s32_u32(dword_literal_32))));
++       },
++       4)
++ 
++@@ -752,7 +752,8 @@ __attribute__((always_inline)) uint8x16_t VectorFirstColPrediction(
++   const uint8x16_t min_pred = vminq_u8(up, right);
++   const uint8x16_t max_pred = vmaxq_u8(up, right);
++   const uint8x16_t right_grad = vreinterpretq_u8_s8(vaddq_s8(
++-      right, vsubq_s8(vreinterpretq_s8_u8(up), vreinterpretq_s8_u8(up_right))));
+++      vreinterpretq_s8_u8(right),
+++      vsubq_s8(vreinterpretq_s8_u8(up), vreinterpretq_s8_u8(up_right))));
++   const uint8x16_t up_right_above_max = vcgtq_u8(up_right, max_pred);
++   const uint8x16_t up_right_below_min = vcltq_u8(up_right, min_pred);
++   uint8x16_t pred = vbslq_u8(up_right_above_max, max_pred, min_pred);
+diff --git a/community/qt6-qtwebengine/vince-qtwebengine-multiplanar-native-pixmap.patch b/community/qt6-qtwebengine/vince-qtwebengine-multiplanar-native-pixmap.patch
+new file mode 100644
+index 00000000000..88c07dd6d3f
+--- /dev/null
++++ b/community/qt6-qtwebengine/vince-qtwebengine-multiplanar-native-pixmap.patch
+@@ -0,0 +1,114 @@
++From ae6991d950bb343accad96b96047fe605c17bcc3 Mon Sep 17 00:00:00 2001
++From: Peter Varga <pvarga@inf.u-szeged.hu>
++Date: Wed, 29 Apr 2026 14:52:12 +0200
++Subject: [PATCH] Fix AMD VA-API flickering on Wayland by allowing multi-planar
++ NativePixmap import
++
++Hardware-accelerated video decoding on Wayland uses the YUV420 format,
++which is multi-planar. We previously disabled multi-planar support
++globally because we cannot allocate or import these formats via dma-buf.
++
++However, the video decoder only needs to create a NativePixmap from an
++existing handle. It does not rely on our implementation for direct
++allocation nor does it require direct dma-buf import for presenting.
++
++Report multi-planar buffer support to Chromium so it can correctly
++handle VA-API YUV frames. Add guards against using multi-planar formats
++in unimplemented code paths instead of disabling support globally.
++
++X11/GLX is unaffected, as it only supports the BGRA8888 format.
++
++Fixes: QTBUG-145344
++Change-Id: Ibc08d438dcf7598438ae016cdb5fa646d9ab12f3
++Reviewed-by: Moss Heim <moss.heim@qt.io>
++(cherry picked from commit 5210a30b0a1042e60f2ee2a7b74fa9c48d9be098)
++Reviewed-by: Allan Sandfeld Jensen <allan.jensen@qt.io>
++---
++ .../native_skia_output_device_opengl.cpp          | 10 ++++++++++
++ .../native_skia_output_device_vulkan.cpp          |  8 +++++---
++ src/core/ozone/surface_factory_qt.cpp             | 15 ++++++++++-----
++ 3 files changed, 25 insertions(+), 8 deletions(-)
++
++diff --git a/src/core/compositor/native_skia_output_device_opengl.cpp b/src/core/compositor/native_skia_output_device_opengl.cpp
++index 226aaab0fda..ea8878d8aab 100644
++--- a/src/core/compositor/native_skia_output_device_opengl.cpp
+++++ b/src/core/compositor/native_skia_output_device_opengl.cpp
++@@ -238,6 +238,11 @@ QSGTexture *NativeSkiaOutputDeviceOpenGL::texture(QQuickWindow *win, uint32_t te
++             GLXHelper *glxHelper = GLXHelper::instance();
++             auto *glxFun = glxHelper->functions();
++ 
+++            if (nativePixmap->GetNumberOfPlanes() != 1) {
+++                qFatal("GLX: Importing multiple planes is not supported: %zu",
+++                       nativePixmap->GetNumberOfPlanes());
+++            }
+++
++             const auto dmaBufFd = HANDLE_EINTR(dup(nativePixmap->GetDmaBufFd(0)));
++             if (dmaBufFd < 0) {
++                 qFatal("GLX: Could not import the dma-buf as an XPixmap because the FD couldn't be "
++@@ -299,6 +304,11 @@ QSGTexture *NativeSkiaOutputDeviceOpenGL::texture(QQuickWindow *win, uint32_t te
++             auto *eglFun = eglHelper->functions();
++             auto *glExtFun = GLHelper::instance()->functions();
++ 
+++            if (nativePixmap->GetNumberOfPlanes() != 1) {
+++                qFatal("EGL: Importing multiple planes is not supported: %zu",
+++                       nativePixmap->GetNumberOfPlanes());
+++            }
+++
++             const auto dmaBufFd = HANDLE_EINTR(dup(nativePixmap->GetDmaBufFd(0)));
++             if (dmaBufFd < 0) {
++                 qFatal("EGL: Could not import the dma-buf as an EGLImage because the FD couldn't "
++diff --git a/src/core/compositor/native_skia_output_device_vulkan.cpp b/src/core/compositor/native_skia_output_device_vulkan.cpp
++index 503f607f2b2..7309943a1ec 100644
++--- a/src/core/compositor/native_skia_output_device_vulkan.cpp
+++++ b/src/core/compositor/native_skia_output_device_vulkan.cpp
++@@ -145,11 +145,13 @@ QSGTexture *NativeSkiaOutputDeviceVulkan::texture(QQuickWindow *win, uint32_t te
++         gfx::NativePixmapHandle nativePixmapHandle = nativePixmap->ExportHandle();
++         qCDebug(lcWebEngineCompositor, "  DRM Format Modifier: 0x%lx", nativePixmapHandle.modifier);
++ 
+++        if (nativePixmapHandle.planes.size() != 1) {
+++            qFatal("VULKAN: Importing multiple planes is not supported: %zu",
+++                   nativePixmapHandle.planes.size());
+++        }
+++
++         if (nativePixmapHandle.modifier != gfx::NativePixmapHandle::kNoModifier) {
++             usingDrmModifier = true;
++-            if (nativePixmapHandle.planes.size() != 1)
++-                qFatal("VULKAN: Multiple planes are not supported.");
++-
++             planeLayout.offset = nativePixmapHandle.planes[0].offset;
++             planeLayout.rowPitch = nativePixmapHandle.planes[0].stride;
++             modifierInfo.drmFormatModifier = nativePixmapHandle.modifier;
++diff --git a/src/core/ozone/surface_factory_qt.cpp b/src/core/ozone/surface_factory_qt.cpp
++index cd96e634ab7..6afb7d3e018 100644
++--- a/src/core/ozone/surface_factory_qt.cpp
+++++ b/src/core/ozone/surface_factory_qt.cpp
++@@ -87,12 +87,8 @@ bool SurfaceFactoryQt::CanCreateNativePixmapForFormat(gfx::BufferFormat format)
++ #endif
++ 
++ #if QT_CONFIG(egl)
++-    if (OzoneUtilQt::usingEGL()) {
++-        // Multiplanar format support is not yet implemented. See EGLHelper::queryDmaBuf().
++-        if (gfx::BufferFormatIsMultiplanar(format))
++-            return false;
+++    if (OzoneUtilQt::usingEGL())
++         return ui::SurfaceFactoryOzone::CanCreateNativePixmapForFormat(format);
++-    }
++ #endif
++ #endif // QT_CONFIG(opengl)
++ 
++@@ -133,6 +129,15 @@ scoped_refptr<gfx::NativePixmap> SurfaceFactoryQt::CreateNativePixmap(
++ 
++ #if QT_CONFIG(egl)
++     if (OzoneUtilQt::usingEGL()) {
+++        // Multi-planar formats are only supported when creating NativePixmap from an existing
+++        // handle (eg. for hardware video decoding), which is handled by
+++        // CreateNativePixmapFromHandle().
+++        if (gfx::BufferFormatIsMultiplanar(format)) {
+++            qFatal("Direct allocation of multi-planar GBM buffer (format: %s) via EGL is "
+++                   "currently unsupported.",
+++                   gfx::BufferFormatToString(format));
+++        }
+++
++         auto gbmBuffer = EGLHelper::instance()->createBuffer(format, size, usage);
++         if (gbmBuffer)
++             bufferHandle = gbmBuffer->ExportHandle();
+diff --git a/community/qt6-qtwebengine/vince-qtwebengine-musl-timeval-types.patch b/community/qt6-qtwebengine/vince-qtwebengine-musl-timeval-types.patch
+new file mode 100644
+index 00000000000..62dc4e32655
+--- /dev/null
++++ b/community/qt6-qtwebengine/vince-qtwebengine-musl-timeval-types.patch
+@@ -0,0 +1,14 @@
++diff --git a/src/3rdparty/chromium/media/gpu/v4l2/v4l2_utils.cc b/src/3rdparty/chromium/media/gpu/v4l2/v4l2_utils.cc
++--- a/src/3rdparty/chromium/media/gpu/v4l2/v4l2_utils.cc
+++++ b/src/3rdparty/chromium/media/gpu/v4l2/v4l2_utils.cc
++@@ -563,7 +563,7 @@ struct timeval TimeDeltaToTimeVal(base::TimeDelta time_delta) {
++   const int64_t time_delta_linear = time_delta.InMicroseconds();
++   constexpr int64_t kMicrosecondsPerSecond = 1000 * 1000;
++-  return {.tv_sec = base::checked_cast<__time_t>(time_delta_linear /
+++  return {.tv_sec = base::checked_cast<time_t>(time_delta_linear /
++                                                  kMicrosecondsPerSecond),
++-          .tv_usec = base::checked_cast<__suseconds_t>(time_delta_linear %
+++          .tv_usec = base::checked_cast<suseconds_t>(time_delta_linear %
++                                                        kMicrosecondsPerSecond)};
++ }
++
+diff --git a/community/qt6-qtwebengine/vince-qtwebengine-nv12-per-plane.patch b/community/qt6-qtwebengine/vince-qtwebengine-nv12-per-plane.patch
+new file mode 100644
+index 00000000000..42ba4fb7e25
+--- /dev/null
++++ b/community/qt6-qtwebengine/vince-qtwebengine-nv12-per-plane.patch
+@@ -0,0 +1,46 @@
++From 1a9d852c8cd1a2da7acd79b788c4001983bc74cd Mon Sep 17 00:00:00 2001
++From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
++Date: Sat, 5 Sep 2026 15:50:00 +0300
++Subject: [PATCH] media/gpu: prefer per-plane video SharedImages on Linux
++
++Upstream-Status: Inappropriate [Vince diagnostic experiment]
++
++Qt WebEngine 6.11.1 on the Adreno 506/freedreno Vince target successfully
++decodes NV12 through the stateful V4L2 backend, but its first decoded frame
++fails SharedImage creation with ExtSamplerOn and loses the GPU context.
++
++Keep the established external-sampler preference on ChromeOS. On desktop
++Linux, retain the same platform NV12 buffer and SharedImage usages but expose
++the multiplanar format without the external-sampler preference. Log the exact
++candidate format at VLOG level 1 so the one-variable experiment can prove
++whether the request reaches SharedImage creation as ExtSamplerOff.
++---
++ .../gpu/chromeos/mailbox_video_frame_converter.cc | 11 +++++++----
++ 1 file changed, 7 insertions(+), 4 deletions(-)
++
++diff --git a/src/3rdparty/chromium/media/gpu/chromeos/mailbox_video_frame_converter.cc b/src/3rdparty/chromium/media/gpu/chromeos/mailbox_video_frame_converter.cc
++index 0a98f4f7e2..e9754753ac 100644
++--- a/src/3rdparty/chromium/media/gpu/chromeos/mailbox_video_frame_converter.cc
+++++ b/src/3rdparty/chromium/media/gpu/chromeos/mailbox_video_frame_converter.cc
++@@ -321,13 +321,16 @@ bool MailboxVideoFrameConverter::CreateSharedImage(
++                            VideoPixelFormatToString(origin_frame->format()));
++     return false;
++   }
++-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
++-  // If format is true multiplanar format, we prefer external sampler on
++-  // ChromeOS and Linux.
+++#if BUILDFLAG(IS_CHROMEOS)
+++  // ChromeOS prefers an external sampler for true multiplanar formats.
++   if (si_format->is_multi_plane()) {
++     si_format->SetPrefersExternalSampler();
++   }
++ #endif
+++  DVLOGF(1) << "SharedImage candidate format=" << si_format->ToString()
+++            << ", multi_plane=" << si_format->is_multi_plane()
+++            << ", prefers_external_sampler="
+++            << si_format->PrefersExternalSampler();
++ 
++   auto gpu_memory_buffer_handle = origin_frame->CreateGpuMemoryBufferHandle();
++   DCHECK(!gpu_memory_buffer_handle.is_null());
++-- 
++2.43.0
+diff --git a/community/qt6-qtwebengine/vince-qtwebengine-v4l2.patch b/community/qt6-qtwebengine/vince-qtwebengine-v4l2.patch
+new file mode 100644
+index 00000000000..5b0f295ed0c
+--- /dev/null
++++ b/community/qt6-qtwebengine/vince-qtwebengine-v4l2.patch
+@@ -0,0 +1,44 @@
++diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
++index 7ec30d7..089482a 100644
++--- a/src/core/CMakeLists.txt
+++++ b/src/core/CMakeLists.txt
++@@ -535,6 +535,10 @@ function(addSyncTargets target arch config)
++                 ARGS use_vaapi
++                 CONDITION QT_FEATURE_webengine_vaapi
++             )
+++            extend_gn_list(gnArgArg
+++                ARGS use_v4l2_codec
+++                CONDITION QT_FEATURE_webengine_v4l2_codec
+++            )
++             extend_gn_list(gnArgArg
++                 ARGS ozone_platform_x11 use_xkbcommon
++                 CONDITION QT_FEATURE_webengine_ozone_x11
++diff --git a/src/core/api/configure.cmake b/src/core/api/configure.cmake
++index 107cded..aa0fab3 100644
++--- a/src/core/api/configure.cmake
+++++ b/src/core/api/configure.cmake
++@@ -172,6 +172,13 @@ qt_feature("webengine-vulkan" PRIVATE
++     CONDITION QT_FEATURE_vulkan
++     DISABLE MACOS
++ )
+++qt_feature("webengine-v4l2-codec" PRIVATE
+++    SECTION "WebEngine"
+++    LABEL "V4L2 codec support"
+++    PURPOSE "Enables V4L2 hardware video decoding on Linux"
+++    AUTODETECT OFF
+++    CONDITION LINUX
+++)
++ qt_feature("webengine-vaapi" PRIVATE
++     SECTION "WebEngine"
++     LABEL "VA-API support"
++@@ -217,6 +224,10 @@ qt_configure_add_summary_entry(
++     ARGS "webengine-vulkan"
++     CONDITION QT_FEATURE_vulkan
++ )
+++qt_configure_add_summary_entry(
+++    ARGS "webengine-v4l2-codec"
+++    CONDITION LINUX
+++)
++ qt_configure_add_summary_entry(
++     ARGS "webengine-vaapi"
++     CONDITION LINUX

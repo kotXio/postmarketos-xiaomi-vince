@@ -13,9 +13,29 @@ by the tested device configuration:
 Compiled APKs are not stored in this repository. Package compatibility is tied
 to the exact device and postmarketOS baseline documented by each source.
 
+Qt WebEngine is an existing Alpine package rather than a Vince-only aport, so
+its cumulative recipe diff and source patches are kept under
+[`../patches/qtwebengine/`](../patches/qtwebengine/) instead of duplicating the
+entire upstream package directory here.
+
 The TAS2557 firmware package is the special case: its proprietary blob must be
 extracted from a legally obtained stock image and built locally. Neither the
 blob nor the resulting APK may be redistributed.
+
+## Public installation order
+
+The kernel updates are cumulative but their accompanying userspace packages
+are released in stages:
+
+1. Start with a clean Xiaomi Redmi 5 Plus (`vince`) postmarketOS `v26.06`
+   installation.
+2. Install [`v2026.09.04`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.04).
+3. Install [`v2026.09.05-autofocus`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.05-autofocus).
+4. Install [`v2026.09.05-torch`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.05-torch).
+
+The WebEngine update is separate from that kernel sequence. It requires the
+official Qt WebEngine `6.11.1-r3` package as its starting version and was tested
+with the cumulative torch kernel.
 
 ## Tested binary release
 
@@ -40,13 +60,10 @@ Exact compatibility:
 - kernel and pmaports bases pinned in [`../SOURCES.md`](../SOURCES.md);
 - exact `libcamera-ipa=99990.7.1-r0` for the tuning package.
 
-The project handset originally used the postmarketOS `v26.06` core packages
+The supported starting point uses the postmarketOS `v26.06` core packages
 `linux-postmarketos-qcom-msm8953-7.0.9-r0`,
 `device-qcom-msm8953-13-r0`, `device-qcom-msm8953-udev-13-r0` and
-`soc-qcom-msm8953-ucm-19-r0`. It reached the released cumulative set through
-controlled incremental installs. A complete one-shot installation has not
-been repeated on a second handset, so always run the simulated transaction
-first.
+`soc-qcom-msm8953-ucm-19-r0`. Always run the simulated transaction first.
 
 ## Experimental autofocus release
 
@@ -64,7 +81,7 @@ is an incremental update over the exact tested `v2026.09.04` state:
 | `plasma-camera-lang-2.1.1-r6.apk` | Matching language split. |
 | `libpisp-1.5.0-r0.apk` | Unmodified Alpine compatibility package retained by the transaction. |
 
-The accepted starting versions are cumulative kernel r3, device and udev r2,
+The required starting versions are cumulative kernel r3, device and udev r2,
 camera policy r0, libcamera/IPA `99990.7.1-r0`, OV12A10 tuning `1.0-r0`, Plasma
 Camera/language `2.1.1-r2` and `libpisp-1.5.0-r0`. Check the exact installed
 versions with `apk info -v` before continuing. Do not use this Release on a
@@ -76,9 +93,8 @@ checksum-valid EEPROM and are not claimed to be universal.
 
 ### Install the autofocus update
 
-Close Plasma Camera and save the exact old kernel, libcamera/IPA, tuning and
-Plasma Camera/language APKs for rollback. Download all seven assets and
-`SHA256SUMS` into one empty directory, then run:
+Install the complete public `v2026.09.04` set first. Close Plasma Camera, then
+download all seven autofocus assets and `SHA256SUMS` into one empty directory:
 
 ```sh
 sha256sum -c SHA256SUMS
@@ -105,25 +121,125 @@ sudo reboot
 ```
 
 The expected file mode and owner are `644 root:root`. After reboot, check rear
-autofocus, rapid rear/front switching and one still from each camera. Close the
-application and confirm that no new coredump appears. A flat scene may validly
-finish as `AfStateFailed`.
+autofocus, rapid rear/front switching and one still from each camera. A flat
+scene may validly finish as `AfStateFailed`.
 
 ### Roll back the autofocus update
 
-Use the exact pre-install APKs saved from the same handset. First simulate one
-local transaction restoring kernel r3, libcamera/IPA r0, tuning r0 and Plasma
-Camera/language r2 while retaining `libpisp`; continue only if it removes
-nothing unrelated. Repeat without `--simulate` and reboot. Automated rollback
-helpers and handset backups are intentionally not distributed by this project.
+Return to the public `v2026.09.04` kernel and OV12A10 tuning assets, and restore
+the official postmarketOS `v26.06` libcamera/IPA `99990.7.1-r0` and Plasma
+Camera/language `2.1.1-r2` packages from the configured repositories. Simulate
+the complete downgrade first and continue only if it keeps `libpisp` and
+changes no unrelated package. If those exact official versions are no longer
+available, reinstall the matching postmarketOS image rather than mixing
+package baselines.
+
+## Incremental torch release
+
+Release
+[`v2026.09.05-torch`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.05-torch)
+contains one incremental asset for the public autofocus Release:
+
+| Package | Purpose |
+| --- | --- |
+| `linux-postmarketos-qcom-msm8953-7.0.9_p20260905194220-r7.apk` | Cumulative kernel with the PMI8950 dual-colour continuous torch. |
+
+The APK was built from the reviewed public patch series and preserves the
+cumulative TAS2557/Mic2, RMI4, OV12A10, DW9763 and autofocus changes.
+
+Install the complete
+[`v2026.09.05-autofocus`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.05-autofocus)
+set first. Download this Release's APK and `SHA256SUMS` into an empty directory,
+then verify and simulate the kernel upgrade:
+
+```sh
+sha256sum -c SHA256SUMS
+
+sudo apk add --simulate --allow-untrusted \
+  ./linux-postmarketos-qcom-msm8953-7.0.9_p20260905194220-r7.apk
+```
+
+Continue only if no package is removed and no package other than
+`linux-postmarketos-qcom-msm8953` changes. Repeat without `--simulate`, reboot,
+then test the normal Plasma Mobile flashlight control and confirm that the
+torch switches fully off. Advanced cool/warm controls are available through
+`/sys/class/leds/white:torch`.
+
+For rollback, download the `r4` kernel APK and `SHA256SUMS` from the public
+autofocus Release. Verify the checksum, simulate the one-package downgrade,
+install it and reboot. Photo flash and V4L2/sensor strobe integration are
+deliberately deferred.
+
+## Experimental WebEngine hardware-video release
+
+Release
+[`v2026.09.05-webengine`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.05-webengine)
+contains one cumulative userspace package:
+
+| Package | Purpose |
+| --- | --- |
+| `qt6-qtwebengine-6.11.1-r10.apk` | Enable Chromium's standard-Linux stateful V4L2 path and complete H.264/NV12 import through Qt Ozone. |
+
+It targets Xiaomi Redmi 5 Plus (`xiaomi,vince`), `aarch64`, postmarketOS
+`v26.06`, Qt WebEngine `6.11.1-r3` ancestry and bundled Chromium commit
+`37b6aeaa3ef9bf7e1901aa02a317a2707557709d`. It was tested with the
+cumulative `7.0.9-msm8953` `r7` kernel, but changes no kernel, firmware,
+service or camera/audio package.
+
+The package was tested on one handset. Confirm that the installed starting
+version is the official `qt6-qtwebengine-6.11.1-r3`; this Release does not
+replace any other package.
+
+Download the r10 APK and `SHA256SUMS` into one empty directory and verify one
+package upgrade:
+
+```sh
+sha256sum -c SHA256SUMS
+
+sudo apk add --simulate --allow-untrusted \
+  ./qt6-qtwebengine-6.11.1-r10.apk
+```
+
+Continue only if `qt6-qtwebengine` is the sole changed package and nothing is
+added or removed. Repeat without `--simulate`; no reboot is required:
+
+```sh
+sudo apk add --allow-untrusted \
+  ./qt6-qtwebengine-6.11.1-r10.apk
+```
+
+The APK does not enable the browser feature by itself. Copy the system desktop
+entry to the per-user application directory if needed, then use this exact
+`Exec=` line:
+
+```text
+Exec=/usr/bin/env QTWEBENGINE_CHROMIUM_FLAGS="--disable-gpu-rasterization --disable-webgl --enable-features=AcceleratedVideoDecoder" /usr/bin/angelfish %u
+```
+
+Fully stop the previous Angelfish process and start it again from the Plasma
+Mobile icon. A normal playback check should show the dynamically resolved
+`qcom-venus-decoder` runtime status as `active`; it must return to `suspended`
+after playback stops. Keep the two rendering-stability flags: hardware video
+does not replace them.
+
+To disable hardware video, remove only
+`--enable-features=AcceleratedVideoDecoder` from the launcher while retaining
+the two stability flags, then fully restart Angelfish. For a complete package
+rollback, use the configured postmarketOS `v26.06` repositories to simulate and
+restore `qt6-qtwebengine=6.11.1-r3`. Continue only if it is the sole changed
+package. Reboot is not required.
+
+Hardware decoding and smooth YouTube playback were confirmed. In an A/B test,
+browser CPU use was about half that of software decoding. Two Venus firmware
+errors recovered automatically during a longer fullscreen test without a
+visible playback problem, so extended playback remains experimental; see
+[`../fixes/hardware-video.md`](../fixes/hardware-video.md).
 
 ## Installing base Release v2026.09.04
 
-Keep a working recovery path and obtain copies of the exact kernel, device,
-udev and MSM8953 UCM APK versions currently installed. They are required for
-rollback and are not included in this Release. If the installed baseline
-differs from the versions above, do not continue without rebuilding or
-reviewing the packages.
+Install the base set only on the exact postmarketOS `v26.06` starting versions
+listed above. If the installed baseline differs, rebuild the packages or use a
+matching postmarketOS image.
 
 Download all six APKs and `SHA256SUMS` from the Release into one empty
 directory, then verify the downloaded bytes:
@@ -147,14 +263,12 @@ The expected output includes `xiaomi,vince`, `aarch64` and
 
 First build and verify the local proprietary
 [`firmware-xiaomi-vince-tas2557-local`](firmware-xiaomi-vince-tas2557-local/README.md)
-APK. Set `firmware_apk` to its absolute path. The firmware APK is installed in
-the same transaction but is not a public Release asset.
+APK and place it beside the six downloaded public APKs. The firmware APK is
+installed in the same transaction but is not a public Release asset.
 
 Simulate the complete transaction:
 
 ```sh
-firmware_apk=/absolute/path/to/firmware-xiaomi-vince-tas2557-local-11.0.2.0-r0.apk
-
 sudo apk add --simulate --allow-untrusted \
   ./linux-postmarketos-qcom-msm8953-7.0.9_p20260902163513-r3.apk \
   ./device-qcom-msm8953-13-r2.apk \
@@ -162,7 +276,7 @@ sudo apk add --simulate --allow-untrusted \
   ./device-xiaomi-vince-camera-policy-1-r0.apk \
   ./libcamera-ipa-ov12a10-1.0-r0.apk \
   ./alsa-ucm-conf-xiaomi-vince-tas2557-1.0-r1.apk \
-  "$firmware_apk"
+  ./firmware-xiaomi-vince-tas2557-local-11.0.2.0-r0.apk
 ```
 
 Review the proposed package changes. If the simulation is clean, repeat the
@@ -172,41 +286,8 @@ builds; it is safe only after the attached checksums have passed.
 
 ### Manual rollback
 
-Use the exact pre-install APKs saved from your own baseline. For the documented
-stock `v26.06` starting point they are:
-
-- `linux-postmarketos-qcom-msm8953-7.0.9-r0.apk`;
-- `device-qcom-msm8953-13-r0.apk`;
-- `device-qcom-msm8953-udev-13-r0.apk`;
-- `soc-qcom-msm8953-ucm-19-r0.apk`.
-
-Simulate removal of the added packages, repair of the stock UCM provider and
-installation of the three saved core APKs before performing the corresponding
-real operations. Run each command below once with `--simulate` immediately
-after `fix`, `del` or `add`; review all proposed changes before running it
-without that option. A complete rollback follows this order:
-
-```sh
-sudo apk fix --allow-untrusted --force-overwrite \
-  ./rollback/soc-qcom-msm8953-ucm-19-r0.apk
-
-sudo apk del \
-  alsa-ucm-conf-xiaomi-vince-tas2557 \
-  firmware-xiaomi-vince-tas2557-local \
-  device-xiaomi-vince-camera-policy \
-  libcamera-ipa-ov12a10
-
-sudo apk fix --allow-untrusted --force-overwrite \
-  ./rollback/soc-qcom-msm8953-ucm-19-r0.apk
-
-sudo apk add --allow-untrusted \
-  ./rollback/linux-postmarketos-qcom-msm8953-7.0.9-r0.apk \
-  ./rollback/device-qcom-msm8953-13-r0.apk \
-  ./rollback/device-qcom-msm8953-udev-13-r0.apk
-
-sudo reboot
-```
-
-Omit an added package from `apk del` if it was not installed. If the phone can
-no longer boot normally, use the recovery path and saved packages rather than
-attempting a partial live rollback.
+This Release changes the kernel, device integration and audio-provider layout,
+and its proprietary firmware package cannot be distributed. A universal
+package-only rollback bundle is therefore not available. The reliable public
+rollback is to reinstall the official postmarketOS `v26.06` image for
+`xiaomi-vince`, then restore user data from backup.

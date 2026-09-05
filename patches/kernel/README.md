@@ -7,7 +7,7 @@ branch `7.0.9/main`, base commit
 Apply the files in lexical order. Use `git am` for mail-formatted patches
 `0001`-`0004` and `0010`-`0012`. Use `git apply --unidiff-zero` for plain
 diffs `0005`-`0009`, then commit that group before continuing with `git am`.
-Apply plain diff `0013` with `git apply` after `0012`.
+Apply plain diffs `0013` and `0014` with `git apply` after `0012`.
 The `--unidiff-zero` flag is required by the intentionally compact
 zero-context TAS2557/RMI4 diffs. The mixed format preserves the original
 upstream TAS2557 authorship and the exact locally tested changes.
@@ -29,6 +29,7 @@ upstream TAS2557 authorship and the exact locally tested changes.
 | `0011` | Cap unstable 1080p `90 fps` mode near `75 fps`. |
 | `0012` | Add DW9763-compatible lens control and link it to OV12A10. |
 | `0013` | Extend the DW9763 maximum to this handset's tested macro endpoint `726`. |
+| `0014` | Add the legacy PMI8950 continuous dual-colour torch with a Vince-only `50 mA` per-channel cap. |
 
 ## Test boundary
 
@@ -40,3 +41,8 @@ camera modes and bounded lens movement/parking were physically checked.
 `0013` is required by the separately published one-shot autofocus stack. Its
 maximum came from one checksum-valid handset EEPROM and is not claimed to be a
 universal calibration for every `vince`.
+
+`0014` exposes four global brightness levels and separate cool/warm intensity
+through one standard `white:torch` multicolor LED. It is physically verified
+on the test handset. Photo flash and V4L2/sensor strobe support are deliberately
+not part of the patch.

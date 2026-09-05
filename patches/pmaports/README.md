@@ -7,7 +7,7 @@ branch `v26.06`, base commit
 Apply the files in lexical order. Use `git apply --unidiff-zero` for plain
 diffs `0001`-`0004`, then commit that group before applying mail-formatted
 patches `0005`-`0007` with `git am`. Apply plain diffs `0008`-`0009` with
-`git apply`.
+`git apply`, then apply plain diff `0010` with `git apply`.
 The patch order mirrors the tested cumulative packages.
 
 | Patch | Purpose |
@@ -21,6 +21,7 @@ The patch order mirrors the tested cumulative packages.
 | `0007` | Add the OV12A10 Simple IPA data package. |
 | `0008` | Package the handset-tested autofocus kernel as `pkgrel=4`. |
 | `0009` | Update the OV12A10 data aport for the exact patched IPA and AF policy. |
+| `0010` | Package the cumulative PMI8950 torch kernel as `pkgrel=7` with built-in multicolor LED support. |
 
 `0002` is build-parity configuration, not part of the RMI4 diagnosis and not a
 device fix by itself. The same package sources are also available as standalone
@@ -28,3 +29,7 @@ directories under [`packages/`](../../packages/).
 
 `0009` depends on the separately built Vince libcamera/IPA `99991.7.1-r3`
 packages. Its `242..726` interval is specific to the test handset.
+
+`0010` is the incremental kernel-only update for the exact published autofocus
+baseline. It does not change the libcamera, Plasma Camera, IPA, UCM or private
+firmware packages.
