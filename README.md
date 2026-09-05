@@ -28,6 +28,8 @@ repeat the work safely.
   `ADC2 Volume=8`, digital source volume `100%`.
 - OV12A10 rear camera support with five tested sensor modes.
 - DW9763 lens movement, parking and bounded manual-focus control.
+- Rear one-shot contrast autofocus integrated with libcamera and Plasma
+  Camera, including rapid-switch teardown guards.
 - RMI4 failed-suspend safety guard. This protects touch after one known suspend
   error path; it is not a complete suspend/resume fix.
 - Stable Angelfish launcher workaround that keeps GPU composition and Canvas
@@ -38,17 +40,27 @@ repeat the work safely.
 - Qt WebEngine does not use the working Qualcomm Venus hardware decoder.
 - Suspend/resume is not reliable, although the RMI4 guard protects touch after
   one known failure path.
-- Rear-camera autofocus is not integrated with libcamera or Plasma Mobile.
+- Autofocus is one-shot at rear-camera session start; continuous AF,
+  touch-to-focus and calibrated focus distance are not implemented.
+- Plasma Camera encoded video remains slow and timestamp-imperfect and has no
+  audio on the tested stack; this is separate from the working autofocus path.
 - The Hall sensor and SIM-dependent telephony/GPS paths remain unverified.
 
 ## Releases
 
-The first physically tested binary set is available as
+The base physically tested binary set is available as
 [`v2026.09.04`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.04).
 It contains the cumulative kernel, matching MSM8953 device/udev packages,
 Vince camera policy, OV12A10 IPA tuning and TAS2557 UCM profile. The target is
 Xiaomi Redmi 5 Plus (`vince`), `aarch64`, postmarketOS `v26.06`, Plasma Mobile
 and Linux `7.0.9-msm8953`.
+
+The incremental experimental autofocus set is available as
+[`v2026.09.05-autofocus`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.05-autofocus).
+It updates the cumulative kernel, libcamera/IPA, OV12A10 tuning and Plasma
+Camera while preserving the earlier audio, touch and camera fixes. Its
+`242..726` actuator endpoints were derived from one test handset and are not
+claimed to be universal for every `vince`.
 
 Read the exact compatibility, checksum, manual installation and rollback
 instructions in [`packages/README.md`](packages/README.md) before using the

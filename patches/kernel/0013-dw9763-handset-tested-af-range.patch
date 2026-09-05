@@ -1,0 +1,13 @@
+diff --git a/drivers/media/i2c/dw9768.c b/drivers/media/i2c/dw9768.c
+index 8dcf3cb6f8ee..450a88a2b8fa 100644
+--- a/drivers/media/i2c/dw9768.c
++++ b/drivers/media/i2c/dw9768.c
+@@ -126,7 +126,7 @@ static const struct dw9768_chip_info dw9763_chip = {
+ 	.supply_names = dw9763_supply_names,
+ 	.num_supplies = ARRAY_SIZE(dw9763_supply_names),
+ 	.supply_voltage_uv = 2850000,
+-	.max_focus_pos = 517,
++	.max_focus_pos = 726,
+ 	.default_focus_pos = 214,
+ 	.aac_mode = 5,
+ 	.aac_timing = 0x38,

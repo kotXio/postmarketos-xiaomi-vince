@@ -1,0 +1,238 @@
+From 3a6c4602cb797e7418ad67bcf790c08f54799e2a Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Fri, 4 Sep 2026 20:39:42 +0300
+Subject: [PATCH] ipa: simple: guard malformed sensor controls
+
+Signed-off-by: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+---
+ src/ipa/simple/soft_simple.cpp      |  45 ++++++++---
+ test/meson.build                    |  12 +++
+ test/simple-ipa-sensor-controls.cpp | 112 ++++++++++++++++++++++++++++
+ 3 files changed, 157 insertions(+), 12 deletions(-)
+ create mode 100644 test/simple-ipa-sensor-controls.cpp
+
+diff --git a/src/ipa/simple/soft_simple.cpp b/src/ipa/simple/soft_simple.cpp
+index f44a70ea..9c3ab771 100644
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -78,10 +78,11 @@ protected:
+ 
+ private:
+ 	void updateExposure(double exposureMSV);
++	void completeSkippedStats(uint32_t frame);
+ 	void emitLensCommand(uint32_t frame);
+ 
+-	DebayerParams *params_;
+-	SwIspStats *stats_;
++	DebayerParams *params_ = nullptr;
++	SwIspStats *stats_ = nullptr;
+ 	std::unique_ptr<CameraSensorHelper> camHelper_;
+ 	ControlInfoMap sensorInfoMap_;
+ 	ControlInfoMap lensInfoMap_;
+@@ -339,11 +340,31 @@ void IPASoftSimple::processStats(const uint32_t frame,
+ 				 [[maybe_unused]] const uint32_t bufferId,
+ 				 const ControlList &sensorControls)
+ {
++	if (!sensorControls.contains(V4L2_CID_EXPOSURE) ||
++	    !sensorControls.contains(V4L2_CID_ANALOGUE_GAIN)) {
++		LOG(IPASoft, Warning)
++			<< "Skipping statistics with missing sensor controls";
++		completeSkippedStats(frame);
++		return;
++	}
++
++	const ControlValue &exposure = sensorControls.get(V4L2_CID_EXPOSURE);
++	const ControlValue &againValue =
++		sensorControls.get(V4L2_CID_ANALOGUE_GAIN);
++	if (exposure.type() != ControlTypeInteger32 || exposure.isArray() ||
++	    exposure.numElements() != 1 ||
++	    againValue.type() != ControlTypeInteger32 || againValue.isArray() ||
++	    againValue.numElements() != 1) {
++		LOG(IPASoft, Warning)
++			<< "Skipping statistics with invalid sensor controls";
++		completeSkippedStats(frame);
++		return;
++	}
++
+ 	IPAFrameContext &frameContext = context_.frameContexts.get(frame);
+ 
+-	frameContext.sensor.exposure =
+-		sensorControls.get(V4L2_CID_EXPOSURE).get<int32_t>();
+-	int32_t again = sensorControls.get(V4L2_CID_ANALOGUE_GAIN).get<int32_t>();
++	frameContext.sensor.exposure = exposure.get<int32_t>();
++	int32_t again = againValue.get<int32_t>();
+ 	frameContext.sensor.gain = camHelper_ ? camHelper_->gain(again) : again;
+ 	frameContext.sensor.appliedExposure = frameContext.sensor.exposure;
+ 	frameContext.sensor.appliedGain = frameContext.sensor.gain;
+@@ -354,13 +375,6 @@ void IPASoftSimple::processStats(const uint32_t frame,
+ 	emitLensCommand(frame);
+ 	metadataReady.emit(frame, metadata);
+ 
+-	/* Sanity check */
+-	if (!sensorControls.contains(V4L2_CID_EXPOSURE) ||
+-	    !sensorControls.contains(V4L2_CID_ANALOGUE_GAIN)) {
+-		LOG(IPASoft, Error) << "Control(s) missing";
+-		return;
+-	}
+-
+ 	ControlList ctrls(sensorInfoMap_);
+ 
+ 	auto &againNew = frameContext.sensor.gain;
+@@ -371,6 +385,13 @@ void IPASoftSimple::processStats(const uint32_t frame,
+ 	setSensorControls.emit(ctrls);
+ }
+ 
++void IPASoftSimple::completeSkippedStats(uint32_t frame)
++{
++	/* Unblock request completion even when teardown supplies a tail frame. */
++	ControlList metadata(controls::controls);
++	metadataReady.emit(frame, metadata);
++}
++
+ void IPASoftSimple::setLensPositionResult(uint32_t frame, int32_t position,
+ 					  int32_t result)
+ {
+diff --git a/test/meson.build b/test/meson.build
+index 2b30b56f..dc9fc9ea 100644
+--- a/test/meson.build
++++ b/test/meson.build
+@@ -79,6 +79,18 @@ internal_tests = [
+          include_directories('../src/ipa/simple'),
+          include_directories('../include/libcamera/ipa'),
+      ]},
++    {'name': 'simple-ipa-sensor-controls',
++     'sources': [
++         'simple-ipa-sensor-controls.cpp',
++         '../src/ipa/simple/ipa_context.cpp',
++         '../src/ipa/simple/soft_simple.cpp',
++     ] + soft_simple_ipa_algorithms,
++     'dependencies': [libipa_dep],
++     'include_directories': [
++         include_directories('../src/ipa/simple'),
++         include_directories('../include/libcamera'),
++         include_directories('../include/libcamera/ipa'),
++     ]},
+     {'name': 'software-isp-lens-gate', 'sources': ['software-isp-lens-gate.cpp']},
+     {'name': 'signal-threads', 'sources': ['signal-threads.cpp']},
+     {'name': 'swstats-cpu-focus', 'sources': ['swstats-cpu-focus.cpp']},
+diff --git a/test/simple-ipa-sensor-controls.cpp b/test/simple-ipa-sensor-controls.cpp
+new file mode 100644
+index 00000000..a01b6c5c
+--- /dev/null
++++ b/test/simple-ipa-sensor-controls.cpp
+@@ -0,0 +1,112 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright (C) 2026, Kostiantyn Andriiuk
++ *
++ * Simple IPA sensor-control tail-frame tests
++ */
++
++#include <iostream>
++#include <memory>
++
++#include <linux/v4l2-controls.h>
++
++#include <libcamera/controls.h>
++#include <libcamera/ipa/ipa_interface.h>
++#include <libcamera/ipa/soft_ipa_interface.h>
++
++#include "test.h"
++
++using namespace libcamera;
++using namespace libcamera::ipa::soft;
++using namespace std;
++
++namespace {
++
++class SimpleIpaSensorControlsTest : public Test
++{
++protected:
++	int run() override
++	{
++		unique_ptr<IPAInterface> base(ipaCreate());
++		auto *ipa = dynamic_cast<IPASoftInterface *>(base.get());
++		if (!ipa) {
++			cerr << "Failed to create the Simple IPA" << endl;
++			return TestFail;
++		}
++
++		unsigned int metadataCount = 0;
++		uint32_t metadataFrame = 0;
++		bool metadataEmpty = false;
++		unsigned int sensorUpdates = 0;
++
++		ipa->metadataReady.connect(this,
++					   [&](uint32_t frame,
++					       const ControlList &metadata) {
++						   ++metadataCount;
++						   metadataFrame = frame;
++						   metadataEmpty = metadata.empty();
++					   });
++		ipa->setSensorControls.connect(this,
++					       [&](const ControlList &) {
++						       ++sensorUpdates;
++					       });
++		auto expectSkipped = [&](uint32_t frame,
++					 const ControlList &controls) {
++			const unsigned int previousCount = metadataCount;
++			ipa->processStats(frame, 0, controls);
++
++			if (metadataCount != previousCount + 1 ||
++			    metadataFrame != frame || !metadataEmpty) {
++				cerr << "Invalid tail controls did not complete empty metadata"
++				     << endl;
++				return false;
++			}
++
++			if (sensorUpdates) {
++				cerr << "Invalid tail controls produced a sensor update"
++				     << endl;
++				return false;
++			}
++
++			return true;
++		};
++
++		/*
++		 * Model DelayedControls returning a present exposure key whose
++		 * ring entry was default-initialised during SoftwareIsp teardown.
++		 */
++		ControlList exposureNone;
++		exposureNone.set(V4L2_CID_EXPOSURE, ControlValue{});
++		exposureNone.set(V4L2_CID_ANALOGUE_GAIN,
++				 ControlValue(static_cast<int32_t>(16)));
++		if (!expectSkipped(17, exposureNone))
++			return TestFail;
++
++		ControlList gainNone;
++		gainNone.set(V4L2_CID_EXPOSURE,
++			     ControlValue(static_cast<int32_t>(100)));
++		gainNone.set(V4L2_CID_ANALOGUE_GAIN, ControlValue{});
++		if (!expectSkipped(18, gainNone))
++			return TestFail;
++
++		ControlList exposureMissing;
++		exposureMissing.set(V4L2_CID_ANALOGUE_GAIN,
++				    ControlValue(static_cast<int32_t>(16)));
++		if (!expectSkipped(19, exposureMissing))
++			return TestFail;
++
++		ControlList exposureWrongType;
++		exposureWrongType.set(V4L2_CID_EXPOSURE,
++				      ControlValue(static_cast<int64_t>(100)));
++		exposureWrongType.set(V4L2_CID_ANALOGUE_GAIN,
++				      ControlValue(static_cast<int32_t>(16)));
++		if (!expectSkipped(20, exposureWrongType))
++			return TestFail;
++
++		return TestPass;
++	}
++};
++
++} /* namespace */
++
++TEST_REGISTER(SimpleIpaSensorControlsTest)
+-- 
+2.43.0
+

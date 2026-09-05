@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: CC0-1.0
 %YAML 1.1
 ---
 version: 1
@@ -7,5 +6,25 @@ algorithms:
       blackLevel: 4096
   - Awb:
   - Adjust:
+  - Af:
+      infinity: 242
+      macro: 726
+      coarseStep: 48
+      fineStep: 8
+      settleFrames: 2
+      metricFrames: 3
+      aeMinimumFrames: 12
+      aeWindowFrames: 12
+      aeMaximumFrames: 180
+      maximumMetricFrames: 60
+      aeMaximumRatio: 1.05
+      maximumExposureRatio: 1.25
+      minimumFocusSpread: 0.05
+      minimumMean: 8.0
+      maximumMean: 247.0
+      maximumClippedFraction: 0.30
+      minimumScore: 0.01
+      confirmationMinimumRatio: 0.80
+      confirmationMaximumRatio: 1.25
   - Agc:
 ...

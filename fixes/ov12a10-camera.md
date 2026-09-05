@@ -14,7 +14,8 @@ Kernel patches [`0008` through `0011`](../patches/kernel/README.md#patch-order)
 add the sensor, correct its crop/rotation metadata, add tested modes and cap
 1080p near `75 fps`. The pmaports changes build and load the module. The
 [`libcamera-ipa-ov12a10`](../packages/libcamera-ipa-ov12a10/README.md) package
-sets the Simple IPA black level to `4096`.
+sets the Simple IPA black level to `4096` and, with the separately documented
+[autofocus stack](ov12a10-autofocus.md), supplies the bounded focus policy.
 
 ## Verified modes
 
@@ -36,6 +37,7 @@ or proprietary blob is redistributed here.
 
 ## Limitations
 
-The tuning contains only the verified black-level correction, not a complete
-per-unit colour or lens-shading calibration. DW9763 movement works separately,
-but application-level continuous autofocus is not included.
+The tuning is not a complete per-unit colour or lens-shading calibration. Its
+autofocus endpoints came from one checksum-valid Sunny module and are not
+universal. One-shot rear-session autofocus is included; continuous AF and
+touch-to-focus are not.

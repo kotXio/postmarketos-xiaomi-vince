@@ -15,9 +15,10 @@ adds the compatible binding/driver path, the `0x0c` Device Tree node, the
 [pmaports patch](../patches/pmaports/0005-enable-dw9763-on-vince.patch) builds
 and loads `dw9768`, the shared driver module.
 
-The exposed focus control is bounded to `0..517`, step `1`, with default
-position `214`. The tested actuator setup uses AAC mode `5`, timing `0x38` and
-prescaler `1`.
+The first conservative stage exposed `0..517`, step `1`, with default position
+`214`. The later [one-shot autofocus work](ov12a10-autofocus.md) raised the
+kernel maximum to the test handset's checksum-validated macro endpoint `726`.
+The actuator setup uses AAC mode `5`, timing `0x38` and prescaler `1`.
 
 The optional
 [`device-xiaomi-vince-camera-policy`](../packages/device-xiaomi-vince-camera-policy/README.md)
@@ -31,6 +32,7 @@ references are recorded under [IPA and camera policy](../SOURCES.md#ipa-and-came
 
 ## Limitations
 
-The values are safe tested bounds, not calibrated near/far endpoints for every
-handset. Manual movement and parking are supported; autofocus integration is
-not implemented.
+The `242..726` autofocus interval is physically verified only on the test
+handset and is not calibrated near/far distance for every phone. Manual
+movement, one-shot autofocus and parking work; continuous AF and calibrated
+manual distance do not.

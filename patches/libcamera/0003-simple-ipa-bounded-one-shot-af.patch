@@ -1,0 +1,2062 @@
+From 298e3c4f1205032299ea59f9f6b3423747c11870 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Fri, 4 Sep 2026 11:37:53 +0300
+Subject: [PATCH] Add bounded Simple IPA autofocus
+
+---
+ .../internal/software_isp/software_isp.h      |   2 +-
+ .../internal/software_isp/swisp_stats.h       |   4 +
+ include/libcamera/ipa/soft.mojom              |   3 +-
+ src/ipa/simple/algorithms/af.cpp              | 317 ++++++++++
+ src/ipa/simple/algorithms/af.h                |  56 ++
+ src/ipa/simple/algorithms/af_state.cpp        | 573 ++++++++++++++++++
+ src/ipa/simple/algorithms/af_state.h          | 186 ++++++
+ src/ipa/simple/algorithms/meson.build         |   2 +
+ src/ipa/simple/ipa_context.h                  |   3 +
+ src/ipa/simple/soft_simple.cpp                |  58 +-
+ src/libcamera/software_isp/software_isp.cpp   |   6 +-
+ .../software_isp/swstats_cpu_focus.cpp        |   4 +
+ test/meson.build                              |  17 +-
+ test/simple-ipa-af.cpp                        | 479 +++++++++++++++
+ test/swstats-cpu-focus.cpp                    |  14 +-
+ 15 files changed, 1706 insertions(+), 18 deletions(-)
+ create mode 100644 src/ipa/simple/algorithms/af.cpp
+ create mode 100644 src/ipa/simple/algorithms/af.h
+ create mode 100644 src/ipa/simple/algorithms/af_state.cpp
+ create mode 100644 src/ipa/simple/algorithms/af_state.h
+ create mode 100644 test/simple-ipa-af.cpp
+
+diff --git a/include/libcamera/internal/software_isp/software_isp.h b/include/libcamera/internal/software_isp/software_isp.h
+index 602da62c..af346746 100644
+--- a/include/libcamera/internal/software_isp/software_isp.h
++++ b/include/libcamera/internal/software_isp/software_isp.h
+@@ -48,7 +48,7 @@ LOG_DECLARE_CATEGORY(SoftwareIsp)
+ class SoftwareIsp : public Object
+ {
+ public:
+-	SoftwareIsp(PipelineHandler *pipe, const CameraSensor *sensor,
++	SoftwareIsp(PipelineHandler *pipe, CameraSensor *sensor,
+ 		    ControlInfoMap *ipaControls);
+ 	~SoftwareIsp();
+ 
+diff --git a/include/libcamera/internal/software_isp/swisp_stats.h b/include/libcamera/internal/software_isp/swisp_stats.h
+index b24a0252..67a6a951 100644
+--- a/include/libcamera/internal/software_isp/swisp_stats.h
++++ b/include/libcamera/internal/software_isp/swisp_stats.h
+@@ -59,6 +59,10 @@ struct SwIspStats {
+ 	 * \brief Number of samples accumulated in focusGreenSum
+ 	 */
+ 	uint64_t focusGreenSamples;
++	/**
++	 * \brief Number of very dark or saturated samples in the focus window
++	 */
++	uint64_t focusClippedSamples;
+ };
+ 
+ } /* namespace libcamera */
+diff --git a/include/libcamera/ipa/soft.mojom b/include/libcamera/ipa/soft.mojom
+index 3240e5ca..a49f15a5 100644
+--- a/include/libcamera/ipa/soft.mojom
++++ b/include/libcamera/ipa/soft.mojom
+@@ -24,7 +24,8 @@ interface IPASoftInterface {
+ 	     libcamera.SharedFD fdStats,
+ 	     libcamera.SharedFD fdParams,
+ 	     libcamera.IPACameraSensorInfo sensorInfo,
+-	     libcamera.ControlInfoMap sensorControls)
++	     libcamera.ControlInfoMap sensorControls,
++	     libcamera.ControlInfoMap lensControls)
+ 		=> (int32 ret, libcamera.ControlInfoMap ipaControls, bool ccmEnabled);
+ 	start() => (int32 ret);
+ 	stop();
+diff --git a/src/ipa/simple/algorithms/af.cpp b/src/ipa/simple/algorithms/af.cpp
+new file mode 100644
+index 00000000..c1735ab1
+--- /dev/null
++++ b/src/ipa/simple/algorithms/af.cpp
+@@ -0,0 +1,317 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * Copyright (C) 2026, Kostiantyn Andriiuk
++ *
++ * Bounded one-shot autofocus for the Simple IPA
++ */
++
++#include "af.h"
++
++#include <algorithm>
++#include <array>
++#include <cmath>
++#include <errno.h>
++
++#include <linux/v4l2-controls.h>
++
++#include <libcamera/base/log.h>
++
++#include <libcamera/control_ids.h>
++
++namespace libcamera {
++
++LOG_DEFINE_CATEGORY(IPASoftAf)
++
++namespace ipa::soft::algorithms {
++
++namespace {
++
++template<typename T>
++bool readRequired(const ValueNode &data, const char *name, T *value)
++{
++	const std::optional<T> parsed = data[name].get<T>();
++	if (!parsed)
++		return false;
++
++	*value = *parsed;
++	return true;
++}
++
++} /* namespace */
++
++int Af::validateLensControls(const ControlInfoMap &controls) const
++{
++	if (controls.empty())
++		return -ENODEV;
++
++	const auto it = controls.find(V4L2_CID_FOCUS_ABSOLUTE);
++	if (it == controls.end())
++		return -ENODEV;
++
++	const ControlInfo &info = it->second;
++	if (info.min().type() != ControlTypeInteger32 ||
++	    info.max().type() != ControlTypeInteger32 ||
++	    info.min().isArray() || info.max().isArray())
++		return -EINVAL;
++
++	const int32_t minimum = info.min().get<int32_t>();
++	const int32_t maximum = info.max().get<int32_t>();
++	if (minimum == maximum)
++		return -EACCES;
++	if (minimum > maximum)
++		return -EINVAL;
++	if (configuration_.infinity < minimum ||
++	    configuration_.macro > maximum)
++		return -ERANGE;
++
++	return 0;
++}
++
++int Af::init(IPAContext &context, const ValueNode &tuningData)
++{
++	if (!tuningData.isDictionary()) {
++		LOG(IPASoftAf, Error) << "Af tuning data must be a dictionary";
++		return -EINVAL;
++	}
++
++	bool valid =
++		readRequired(tuningData, "infinity", &configuration_.infinity) &&
++		readRequired(tuningData, "macro", &configuration_.macro) &&
++		readRequired(tuningData, "coarseStep", &configuration_.coarseStep) &&
++		readRequired(tuningData, "fineStep", &configuration_.fineStep) &&
++		readRequired(tuningData, "settleFrames", &configuration_.settleFrames) &&
++		readRequired(tuningData, "metricFrames", &configuration_.metricFrames) &&
++		readRequired(tuningData, "aeMinimumFrames",
++			     &configuration_.aeMinimumFrames) &&
++		readRequired(tuningData, "aeWindowFrames",
++			     &configuration_.aeWindowFrames) &&
++		readRequired(tuningData, "aeMaximumFrames",
++			     &configuration_.aeMaximumFrames) &&
++		readRequired(tuningData, "maximumMetricFrames",
++			     &configuration_.maximumMetricFrames) &&
++		readRequired(tuningData, "aeMaximumRatio",
++			     &configuration_.aeMaximumRatio) &&
++		readRequired(tuningData, "maximumExposureRatio",
++			     &configuration_.maximumExposureRatio) &&
++		readRequired(tuningData, "minimumFocusSpread",
++			     &configuration_.minimumFocusSpread) &&
++		readRequired(tuningData, "minimumMean",
++			     &configuration_.minimumMean) &&
++		readRequired(tuningData, "maximumMean",
++			     &configuration_.maximumMean) &&
++		readRequired(tuningData, "maximumClippedFraction",
++			     &configuration_.maximumClippedFraction) &&
++		readRequired(tuningData, "minimumScore",
++			     &configuration_.minimumScore) &&
++		readRequired(tuningData, "confirmationMinimumRatio",
++			     &configuration_.confirmationMinimumRatio) &&
++		readRequired(tuningData, "confirmationMaximumRatio",
++			     &configuration_.confirmationMaximumRatio);
++
++	if (!valid || !configuration_.valid()) {
++		LOG(IPASoftAf, Error)
++			<< "Af tuning data is missing a required value or is invalid";
++		return -EINVAL;
++	}
++
++	int ret = context.lensControls
++			  ? validateLensControls(*context.lensControls)
++			  : -ENODEV;
++	if (ret) {
++		LOG(IPASoftAf, Warning)
++			<< "Af tuning is present but no compatible writable lens "
++			   "is linked: "
++			<< ret;
++		return 0;
++	}
++
++	ret = stateMachine_.configure(configuration_);
++	if (ret)
++		return ret;
++
++	const std::array<ControlValue, 1> modes{ controls::AfModeAuto };
++	context.ctrlMap[&controls::AfMode] =
++		ControlInfo(Span<const ControlValue>{ modes },
++			    controls::AfModeAuto);
++	context.ctrlMap[&controls::AfTrigger] =
++		ControlInfo(controls::AfTriggerValues);
++
++	available_ = true;
++	LOG(IPASoftAf, Info)
++		<< "Enabled handset-local one-shot AF over raw lens interval "
++		<< configuration_.infinity << "-" << configuration_.macro;
++	return 0;
++}
++
++int Af::configure([[maybe_unused]] IPAContext &context,
++		  const IPAConfigInfo &configInfo)
++{
++	loggedMetrics_ = 0;
++	loggedStatus_ = AfStatus::Idle;
++	loggedFailure_ = AfFailure::None;
++
++	if (!available_)
++		return 0;
++
++	int ret = validateLensControls(configInfo.lensControls);
++	if (ret) {
++		LOG(IPASoftAf, Error)
++			<< "Linked lens controls changed after AF initialization: "
++			<< ret;
++		return ret;
++	}
++
++	ret = stateMachine_.configure(configuration_);
++	if (ret)
++		return ret;
++
++	return 0;
++}
++
++void Af::queueRequest([[maybe_unused]] IPAContext &context,
++		      [[maybe_unused]] const uint32_t frame,
++		      [[maybe_unused]] IPAFrameContext &frameContext,
++		      const ControlList &controls)
++{
++	if (!available_)
++		return;
++
++	const std::optional<int32_t> mode = controls.get(controls::AfMode);
++	if (mode && *mode != controls::AfModeAuto) {
++		LOG(IPASoftAf, Warning)
++			<< "Ignoring unsupported AF mode " << *mode;
++	}
++
++	const std::optional<int32_t> trigger = controls.get(controls::AfTrigger);
++	if (trigger) {
++		if (*trigger == controls::AfTriggerStart)
++			stateMachine_.start();
++		else if (*trigger == controls::AfTriggerCancel)
++			stateMachine_.cancel();
++	}
++}
++
++int32_t Af::metadataState() const
++{
++	switch (stateMachine_.status()) {
++	case AfStatus::Idle:
++		return controls::AfStateIdle;
++	case AfStatus::Scanning:
++		return controls::AfStateScanning;
++	case AfStatus::Focused:
++		return controls::AfStateFocused;
++	case AfStatus::Failed:
++		return controls::AfStateFailed;
++	}
++
++	return controls::AfStateFailed;
++}
++
++void Af::process([[maybe_unused]] IPAContext &context,
++		 [[maybe_unused]] const uint32_t frame,
++		 IPAFrameContext &frameContext,
++		 const SwIspStats *stats,
++		 ControlList &metadata)
++{
++	if (!available_)
++		return;
++
++	AfFrameStats afStats;
++	afStats.valid = stats->valid;
++	afStats.exposure = frameContext.sensor.appliedExposure;
++	afStats.gain = frameContext.sensor.appliedGain;
++	afStats.exposureProduct =
++		static_cast<double>(afStats.exposure) * afStats.gain;
++
++	if (stats->valid && stats->focusGradientSamples &&
++	    stats->focusGreenSamples &&
++	    stats->focusClippedSamples <= stats->focusGreenSamples) {
++		const double gradient =
++			std::sqrt(static_cast<double>(stats->focusGradientSum) /
++				  stats->focusGradientSamples);
++		const double mean =
++			static_cast<double>(stats->focusGreenSum) /
++			stats->focusGreenSamples;
++
++		afStats.complete = true;
++		afStats.mean = mean;
++		afStats.score = gradient / std::max(mean, 1.0);
++		afStats.clippedFraction =
++			static_cast<double>(stats->focusClippedSamples) /
++			stats->focusGreenSamples;
++	}
++
++	stateMachine_.process(afStats);
++
++	if (stateMachine_.metrics().size() > loggedMetrics_) {
++		const AfPositionMetric &metric = stateMachine_.metrics().back();
++		LOG(IPASoftAf, Debug)
++			<< "AF metric position=" << metric.position
++			<< " score=" << metric.score
++			<< " mean=" << metric.mean
++			<< " clipped=" << metric.clippedFraction
++			<< " exposure=" << metric.exposureProduct;
++		loggedMetrics_ = stateMachine_.metrics().size();
++	}
++
++	if (stateMachine_.status() != loggedStatus_ ||
++	    stateMachine_.failure() != loggedFailure_) {
++		LOG(IPASoftAf, Info)
++			<< "AF state=" << metadataState()
++			<< " failure="
++			<< afFailureName(stateMachine_.failure());
++		loggedStatus_ = stateMachine_.status();
++		loggedFailure_ = stateMachine_.failure();
++	}
++
++	metadata.set(controls::AfMode, controls::AfModeAuto);
++	metadata.set(controls::AfState, metadataState());
++}
++
++std::optional<int32_t> Af::takeLensCommand(uint32_t frame)
++{
++	const std::optional<int32_t> position =
++		stateMachine_.takeLensCommand(frame);
++	if (position) {
++		LOG(IPASoftAf, Debug)
++			<< "Requesting raw lens position " << *position
++			<< " from AF decision frame " << frame;
++	}
++	return position;
++}
++
++void Af::setLensPositionResult(uint32_t frame, int32_t position,
++			       int32_t result)
++{
++	if (!available_)
++		return;
++
++	if (!stateMachine_.setLensPositionResult(frame, position, result)) {
++		LOG(IPASoftAf, Error)
++			<< "Unexpected raw lens result for frame " << frame
++			<< " at position " << position;
++	} else if (result) {
++		LOG(IPASoftAf, Error)
++			<< "Raw lens command for frame " << frame
++			<< " at position " << position
++			<< " failed: " << result;
++	} else {
++		LOG(IPASoftAf, Debug)
++			<< "Raw lens command for frame " << frame
++			<< " applied at position " << position;
++	}
++}
++
++void Af::resetSession()
++{
++	stateMachine_.reset();
++	loggedMetrics_ = 0;
++	loggedStatus_ = AfStatus::Idle;
++	loggedFailure_ = AfFailure::None;
++}
++
++REGISTER_IPA_ALGORITHM(Af, "Af")
++
++} /* namespace ipa::soft::algorithms */
++
++} /* namespace libcamera */
+diff --git a/src/ipa/simple/algorithms/af.h b/src/ipa/simple/algorithms/af.h
+new file mode 100644
+index 00000000..7954c7f7
+--- /dev/null
++++ b/src/ipa/simple/algorithms/af.h
+@@ -0,0 +1,56 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * Copyright (C) 2026, Kostiantyn Andriiuk
++ *
++ * Bounded one-shot autofocus for the Simple IPA
++ */
++
++#pragma once
++
++#include "af_state.h"
++#include "algorithm.h"
++
++namespace libcamera {
++
++namespace ipa::soft::algorithms {
++
++class Af : public Algorithm
++{
++public:
++	Af() = default;
++	~Af() = default;
++
++	int init(IPAContext &context, const ValueNode &tuningData) override;
++	int configure(IPAContext &context,
++		      const IPAConfigInfo &configInfo) override;
++	void queueRequest(IPAContext &context, const uint32_t frame,
++			  IPAFrameContext &frameContext,
++			  const ControlList &controls) override;
++	void process(IPAContext &context, const uint32_t frame,
++		     IPAFrameContext &frameContext,
++		     const SwIspStats *stats,
++		     ControlList &metadata) override;
++
++	bool available() const { return available_; }
++	const AfConfiguration &configuration() const { return configuration_; }
++
++	std::optional<int32_t> takeLensCommand(uint32_t frame);
++	void setLensPositionResult(uint32_t frame, int32_t position,
++				   int32_t result);
++	void resetSession();
++
++private:
++	int validateLensControls(const ControlInfoMap &controls) const;
++	int32_t metadataState() const;
++
++	AfConfiguration configuration_;
++	AfStateMachine stateMachine_;
++	bool available_ = false;
++	std::size_t loggedMetrics_ = 0;
++	AfStatus loggedStatus_ = AfStatus::Idle;
++	AfFailure loggedFailure_ = AfFailure::None;
++};
++
++} /* namespace ipa::soft::algorithms */
++
++} /* namespace libcamera */
+diff --git a/src/ipa/simple/algorithms/af_state.cpp b/src/ipa/simple/algorithms/af_state.cpp
+new file mode 100644
+index 00000000..f8b3b1ec
+--- /dev/null
++++ b/src/ipa/simple/algorithms/af_state.cpp
+@@ -0,0 +1,573 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * Copyright (C) 2026, Kostiantyn Andriiuk
++ *
++ * Bounded one-shot autofocus state machine for the Simple IPA
++ */
++
++#include "af_state.h"
++
++#include <algorithm>
++#include <cmath>
++#include <errno.h>
++#include <limits>
++
++namespace libcamera {
++
++namespace ipa::soft::algorithms {
++
++namespace {
++
++double median(std::vector<double> values)
++{
++	const std::size_t middle = values.size() / 2;
++	std::nth_element(values.begin(), values.begin() + middle, values.end());
++	double result = values[middle];
++
++	if (values.size() % 2 == 0) {
++		const auto lower = std::max_element(values.begin(),
++						   values.begin() + middle);
++		result = (*lower + result) * 0.5;
++	}
++
++	return result;
++}
++
++double ratio(const std::vector<double> &values)
++{
++	double minimum = std::numeric_limits<double>::infinity();
++	double maximum = 0.0;
++
++	for (double value : values) {
++		if (!std::isfinite(value) || value <= 0.0)
++			return std::numeric_limits<double>::infinity();
++		minimum = std::min(minimum, value);
++		maximum = std::max(maximum, value);
++	}
++
++	if (!std::isfinite(minimum) || minimum <= 0.0)
++		return std::numeric_limits<double>::infinity();
++
++	return maximum / minimum;
++}
++
++} /* namespace */
++
++bool AfConfiguration::valid() const
++{
++	return infinity >= 0 && macro > infinity &&
++	       macro - infinity <= 768 &&
++	       coarseStep > 0 && fineStep > 0 && fineStep < coarseStep &&
++	       settleFrames <= 60 &&
++	       metricFrames > 0 && metricFrames <= 9 && metricFrames % 2 == 1 &&
++	       aeMinimumFrames > 0 &&
++	       aeWindowFrames > 0 && aeWindowFrames <= aeMinimumFrames &&
++	       aeMaximumFrames >= aeMinimumFrames &&
++	       maximumMetricFrames >= settleFrames + metricFrames &&
++	       aeMaximumRatio >= 1.0 && maximumExposureRatio >= 1.0 &&
++	       minimumFocusSpread >= 0.0 && minimumFocusSpread < 1.0 &&
++	       minimumMean >= 0.0 && maximumMean > minimumMean &&
++	       maximumMean <= 255.0 &&
++	       maximumClippedFraction >= 0.0 &&
++	       maximumClippedFraction <= 1.0 &&
++	       minimumScore >= 0.0 &&
++	       confirmationMinimumRatio > 0.0 &&
++	       confirmationMaximumRatio >= confirmationMinimumRatio;
++}
++
++const char *afFailureName(AfFailure failure)
++{
++	switch (failure) {
++	case AfFailure::None:
++		return "none";
++	case AfFailure::Incomplete:
++		return "incomplete-statistics";
++	case AfFailure::Dark:
++		return "scene-too-dark";
++	case AfFailure::Clipped:
++		return "scene-too-clipped";
++	case AfFailure::Flat:
++		return "focus-curve-too-flat";
++	case AfFailure::Exposure:
++		return "exposure-unstable";
++	case AfFailure::Lens:
++		return "lens-write-failed";
++	case AfFailure::Timeout:
++		return "statistics-timeout";
++	case AfFailure::Confirmation:
++		return "best-position-confirmation-failed";
++	case AfFailure::Protocol:
++		return "lens-command-protocol-error";
++	}
++
++	return "unknown";
++}
++
++std::vector<int32_t> AfStateMachine::scanPositions(int32_t first,
++						   int32_t last,
++						   int32_t step)
++{
++	std::vector<int32_t> positions;
++
++	if (first < 0 || last < first || step <= 0)
++		return positions;
++
++	for (int32_t value = first; value < last;) {
++		positions.push_back(value);
++		if (value > last - step)
++			break;
++		value += step;
++	}
++
++	if (positions.empty() || positions.back() != last)
++		positions.push_back(last);
++
++	return positions;
++}
++
++int AfStateMachine::configure(const AfConfiguration &configuration)
++{
++	if (!configuration.valid())
++		return -EINVAL;
++
++	configuration_ = configuration;
++	configured_ = true;
++	reset();
++	return 0;
++}
++
++void AfStateMachine::reset()
++{
++	status_ = AfStatus::Idle;
++	failure_ = AfFailure::None;
++	phase_ = Phase::Idle;
++	phaseAfterSettle_ = Phase::Idle;
++	command_.reset();
++	pending_.reset();
++	nextCommandFrame_ = 0;
++	restartAfterPending_ = false;
++	cancelledPending_ = false;
++	currentPosition_.reset();
++	bestPosition_.reset();
++	bestScore_ = 0.0;
++	settleFramesRemaining_ = 0;
++	aeFrames_ = 0;
++	metricFrames_ = 0;
++	aeHistory_.clear();
++	scores_.clear();
++	means_.clear();
++	clippedFractions_.clear();
++	exposures_.clear();
++	activePositions_.clear();
++	activePosition_ = 0;
++	metrics_.clear();
++}
++
++void AfStateMachine::beginScan()
++{
++	status_ = AfStatus::Scanning;
++	failure_ = AfFailure::None;
++	phase_ = Phase::WaitLens;
++	phaseAfterSettle_ = Phase::Idle;
++	command_.reset();
++	restartAfterPending_ = false;
++	cancelledPending_ = false;
++	bestPosition_.reset();
++	bestScore_ = 0.0;
++	settleFramesRemaining_ = 0;
++	aeFrames_ = 0;
++	metricFrames_ = 0;
++	aeHistory_.clear();
++	scores_.clear();
++	means_.clear();
++	clippedFractions_.clear();
++	exposures_.clear();
++	activePositions_.clear();
++	activePosition_ = 0;
++	metrics_.clear();
++
++	requestLens(configuration_.infinity, LensRole::Initial);
++}
++
++void AfStateMachine::start()
++{
++	if (!configured_ || status_ == AfStatus::Scanning)
++		return;
++
++	if (pending_) {
++		status_ = AfStatus::Scanning;
++		failure_ = AfFailure::None;
++		phase_ = Phase::RestartWait;
++		command_.reset();
++		restartAfterPending_ = true;
++		cancelledPending_ = false;
++		return;
++	}
++
++	beginScan();
++}
++
++void AfStateMachine::cancel()
++{
++	if (status_ != AfStatus::Scanning)
++		return;
++
++	status_ = AfStatus::Idle;
++	failure_ = AfFailure::None;
++	phase_ = Phase::Idle;
++	command_.reset();
++	restartAfterPending_ = false;
++	cancelledPending_ = pending_.has_value();
++}
++
++void AfStateMachine::requestLens(int32_t position, LensRole role)
++{
++	if (command_ || pending_)
++		return;
++
++	command_ = LensRequest{ 0, position, role };
++	phase_ = Phase::WaitLens;
++}
++
++std::optional<int32_t> AfStateMachine::takeLensCommand(uint32_t frame)
++{
++	if (!command_ || pending_ || frame < nextCommandFrame_)
++		return std::nullopt;
++
++	command_->frame = frame;
++	pending_ = command_;
++	command_.reset();
++	nextCommandFrame_ = frame + 1;
++	return pending_->position;
++}
++
++void AfStateMachine::enterSettling(Phase next)
++{
++	phaseAfterSettle_ = next;
++	settleFramesRemaining_ = configuration_.settleFrames;
++	phase_ = settleFramesRemaining_ ? Phase::Settle : next;
++	metricFrames_ = 0;
++	scores_.clear();
++	means_.clear();
++	clippedFractions_.clear();
++	exposures_.clear();
++}
++
++bool AfStateMachine::setLensPositionResult(uint32_t frame, int32_t position,
++					    int32_t result)
++{
++	if (!pending_ || pending_->frame != frame ||
++	    pending_->position != position) {
++		if (status_ == AfStatus::Scanning)
++			fail(AfFailure::Protocol);
++		return false;
++	}
++
++	const LensRole role = pending_->role;
++	pending_.reset();
++
++	if (!result)
++		currentPosition_ = position;
++
++	if (cancelledPending_) {
++		cancelledPending_ = false;
++		return true;
++	}
++
++	if (restartAfterPending_) {
++		restartAfterPending_ = false;
++		beginScan();
++		return true;
++	}
++
++	if (role == LensRole::Safe)
++		return true;
++
++	if (result) {
++		fail(AfFailure::Lens);
++		return true;
++	}
++
++	if (status_ != AfStatus::Scanning)
++		return true;
++
++	switch (role) {
++	case LensRole::Initial:
++		enterSettling(Phase::SettleAe);
++		break;
++	case LensRole::Scan:
++		enterSettling(Phase::Collect);
++		break;
++	case LensRole::Winner:
++		enterSettling(Phase::Confirm);
++		break;
++	case LensRole::Safe:
++		break;
++	}
++
++	return true;
++}
++
++AfFailure AfStateMachine::validateFrame(const AfFrameStats &stats) const
++{
++	if (!stats.complete || !std::isfinite(stats.score) ||
++	    !std::isfinite(stats.mean) ||
++	    !std::isfinite(stats.clippedFraction) ||
++	    !std::isfinite(stats.exposureProduct) ||
++	    stats.exposureProduct <= 0.0)
++		return AfFailure::Incomplete;
++
++	if (stats.mean < configuration_.minimumMean)
++		return AfFailure::Dark;
++	if (stats.mean > configuration_.maximumMean ||
++	    stats.clippedFraction > configuration_.maximumClippedFraction)
++		return AfFailure::Clipped;
++	if (stats.score < configuration_.minimumScore)
++		return AfFailure::Flat;
++
++	return AfFailure::None;
++}
++
++AfPositionMetric AfStateMachine::aggregatePosition(int32_t position) const
++{
++	return {
++		position,
++		median(scores_),
++		median(means_),
++		median(clippedFractions_),
++		median(exposures_),
++	};
++}
++
++AfFailure
++AfStateMachine::validateCurve(const std::vector<AfPositionMetric> &metrics) const
++{
++	if (metrics.empty())
++		return AfFailure::Incomplete;
++
++	std::vector<double> exposures;
++	exposures.reserve(metrics.size());
++	double minimumScore = std::numeric_limits<double>::infinity();
++	double maximumScore = 0.0;
++
++	for (const AfPositionMetric &metric : metrics) {
++		exposures.push_back(metric.exposureProduct);
++		minimumScore = std::min(minimumScore, metric.score);
++		maximumScore = std::max(maximumScore, metric.score);
++	}
++
++	if (ratio(exposures) > configuration_.maximumExposureRatio)
++		return AfFailure::Exposure;
++	if (maximumScore <= std::numeric_limits<double>::epsilon() ||
++	    (maximumScore - minimumScore) / maximumScore <
++		    configuration_.minimumFocusSpread)
++		return AfFailure::Flat;
++
++	return AfFailure::None;
++}
++
++void AfStateMachine::startCoarseScan()
++{
++	activePositions_ = scanPositions(configuration_.infinity,
++					 configuration_.macro,
++					 configuration_.coarseStep);
++	activePosition_ = 0;
++	scanStage_ = ScanStage::Coarse;
++	requestLens(activePositions_.front(), LensRole::Scan);
++}
++
++void AfStateMachine::finishPosition()
++{
++	metrics_.push_back(aggregatePosition(activePositions_[activePosition_]));
++
++	++activePosition_;
++	if (activePosition_ < activePositions_.size()) {
++		requestLens(activePositions_[activePosition_], LensRole::Scan);
++		return;
++	}
++
++	finishScanStage();
++}
++
++void AfStateMachine::finishScanStage()
++{
++	const AfFailure validation = validateCurve(metrics_);
++	if (validation != AfFailure::None) {
++		fail(validation);
++		return;
++	}
++
++	if (scanStage_ == ScanStage::Coarse) {
++		const auto best = std::max_element(
++			metrics_.begin(), metrics_.end(),
++			[](const AfPositionMetric &left,
++			   const AfPositionMetric &right) {
++				return left.score < right.score;
++			});
++		const int32_t first = std::max(configuration_.infinity,
++					       best->position -
++						       configuration_.coarseStep);
++		const int32_t last = std::min(configuration_.macro,
++					      best->position +
++						      configuration_.coarseStep);
++		const std::vector<int32_t> candidates =
++			scanPositions(first, last, configuration_.fineStep);
++
++		activePositions_.clear();
++		for (int32_t position : candidates) {
++			const bool sampled = std::any_of(
++				metrics_.begin(), metrics_.end(),
++				[position](const AfPositionMetric &metric) {
++					return metric.position == position;
++				});
++			if (!sampled)
++				activePositions_.push_back(position);
++		}
++
++		scanStage_ = ScanStage::Fine;
++		activePosition_ = 0;
++		if (!activePositions_.empty()) {
++			requestLens(activePositions_.front(), LensRole::Scan);
++			return;
++		}
++	}
++
++	startWinnerConfirmation();
++}
++
++void AfStateMachine::startWinnerConfirmation()
++{
++	const auto best = std::max_element(
++		metrics_.begin(), metrics_.end(),
++		[](const AfPositionMetric &left, const AfPositionMetric &right) {
++			return left.score < right.score;
++		});
++
++	bestPosition_ = best->position;
++	bestScore_ = best->score;
++	requestLens(*bestPosition_, LensRole::Winner);
++}
++
++void AfStateMachine::finishConfirmation()
++{
++	const AfPositionMetric confirmation =
++		aggregatePosition(bestPosition_.value());
++	const double confirmationRatio = confirmation.score / bestScore_;
++
++	std::vector<double> exposures;
++	exposures.reserve(metrics_.size() + 1);
++	for (const AfPositionMetric &metric : metrics_)
++		exposures.push_back(metric.exposureProduct);
++	exposures.push_back(confirmation.exposureProduct);
++
++	if (ratio(exposures) > configuration_.maximumExposureRatio) {
++		fail(AfFailure::Exposure);
++		return;
++	}
++
++	if (confirmationRatio < configuration_.confirmationMinimumRatio ||
++	    confirmationRatio > configuration_.confirmationMaximumRatio) {
++		fail(AfFailure::Confirmation);
++		return;
++	}
++
++	status_ = AfStatus::Focused;
++	failure_ = AfFailure::None;
++	phase_ = Phase::Terminal;
++}
++
++void AfStateMachine::fail(AfFailure failure)
++{
++	status_ = AfStatus::Failed;
++	failure_ = failure;
++	phase_ = Phase::Terminal;
++	command_.reset();
++	pending_.reset();
++	restartAfterPending_ = false;
++	cancelledPending_ = false;
++
++	if (currentPosition_ &&
++	    *currentPosition_ != configuration_.infinity)
++		requestLens(configuration_.infinity, LensRole::Safe);
++}
++
++void AfStateMachine::process(const AfFrameStats &stats)
++{
++	if (status_ != AfStatus::Scanning)
++		return;
++
++	if (phase_ == Phase::Settle) {
++		if (settleFramesRemaining_)
++			--settleFramesRemaining_;
++		if (!settleFramesRemaining_)
++			phase_ = phaseAfterSettle_;
++		return;
++	}
++
++	if (phase_ == Phase::SettleAe) {
++		++aeFrames_;
++		if (!std::isfinite(stats.exposureProduct) ||
++		    stats.exposureProduct <= 0.0 ||
++		    stats.exposure <= 0 || !std::isfinite(stats.gain) ||
++		    stats.gain <= 0.0) {
++			fail(AfFailure::Incomplete);
++			return;
++		}
++
++		aeHistory_.push_back(stats.exposureProduct);
++		if (aeFrames_ >= configuration_.aeMinimumFrames &&
++		    aeHistory_.size() >= configuration_.aeWindowFrames) {
++			const auto first = aeHistory_.end() -
++					   configuration_.aeWindowFrames;
++			const std::vector<double> window(first, aeHistory_.end());
++			if (ratio(window) <= configuration_.aeMaximumRatio) {
++				startCoarseScan();
++				return;
++			}
++		}
++
++		if (aeFrames_ >= configuration_.aeMaximumFrames)
++			fail(AfFailure::Timeout);
++		return;
++	}
++
++	if (phase_ != Phase::Collect && phase_ != Phase::Confirm)
++		return;
++
++	++metricFrames_;
++	if (metricFrames_ > configuration_.maximumMetricFrames) {
++		fail(AfFailure::Timeout);
++		return;
++	}
++
++	if (!stats.valid)
++		return;
++
++	const AfFailure validation = validateFrame(stats);
++	if (validation != AfFailure::None) {
++		fail(validation);
++		return;
++	}
++
++	scores_.push_back(stats.score);
++	means_.push_back(stats.mean);
++	clippedFractions_.push_back(stats.clippedFraction);
++	exposures_.push_back(stats.exposureProduct);
++
++	if (scores_.size() < configuration_.metricFrames)
++		return;
++
++	if (ratio(exposures_) > configuration_.maximumExposureRatio) {
++		fail(AfFailure::Exposure);
++		return;
++	}
++
++	if (phase_ == Phase::Confirm)
++		finishConfirmation();
++	else
++		finishPosition();
++}
++
++} /* namespace ipa::soft::algorithms */
++
++} /* namespace libcamera */
+diff --git a/src/ipa/simple/algorithms/af_state.h b/src/ipa/simple/algorithms/af_state.h
+new file mode 100644
+index 00000000..e0d47639
+--- /dev/null
++++ b/src/ipa/simple/algorithms/af_state.h
+@@ -0,0 +1,186 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * Copyright (C) 2026, Kostiantyn Andriiuk
++ *
++ * Bounded one-shot autofocus state machine for the Simple IPA
++ */
++
++#pragma once
++
++#include <optional>
++#include <stdint.h>
++#include <vector>
++
++namespace libcamera {
++
++namespace ipa::soft::algorithms {
++
++struct AfConfiguration {
++	int32_t infinity = 0;
++	int32_t macro = 0;
++	int32_t coarseStep = 0;
++	int32_t fineStep = 0;
++	unsigned int settleFrames = 0;
++	unsigned int metricFrames = 0;
++	unsigned int aeMinimumFrames = 0;
++	unsigned int aeWindowFrames = 0;
++	unsigned int aeMaximumFrames = 0;
++	unsigned int maximumMetricFrames = 0;
++	double aeMaximumRatio = 0.0;
++	double maximumExposureRatio = 0.0;
++	double minimumFocusSpread = 0.0;
++	double minimumMean = 0.0;
++	double maximumMean = 0.0;
++	double maximumClippedFraction = 0.0;
++	double minimumScore = 0.0;
++	double confirmationMinimumRatio = 0.0;
++	double confirmationMaximumRatio = 0.0;
++
++	bool valid() const;
++};
++
++struct AfFrameStats {
++	bool valid = false;
++	bool complete = false;
++	double score = 0.0;
++	double mean = 0.0;
++	double clippedFraction = 0.0;
++	double exposureProduct = 0.0;
++	int32_t exposure = 0;
++	double gain = 0.0;
++};
++
++struct AfPositionMetric {
++	int32_t position = 0;
++	double score = 0.0;
++	double mean = 0.0;
++	double clippedFraction = 0.0;
++	double exposureProduct = 0.0;
++};
++
++enum class AfStatus {
++	Idle,
++	Scanning,
++	Focused,
++	Failed,
++};
++
++enum class AfFailure {
++	None,
++	Incomplete,
++	Dark,
++	Clipped,
++	Flat,
++	Exposure,
++	Lens,
++	Timeout,
++	Confirmation,
++	Protocol,
++};
++
++const char *afFailureName(AfFailure failure);
++
++class AfStateMachine
++{
++public:
++	AfStateMachine() = default;
++
++	int configure(const AfConfiguration &configuration);
++	void reset();
++
++	void start();
++	void cancel();
++	void process(const AfFrameStats &stats);
++
++	std::optional<int32_t> takeLensCommand(uint32_t frame);
++	bool setLensPositionResult(uint32_t frame, int32_t position, int32_t result);
++
++	AfStatus status() const { return status_; }
++	AfFailure failure() const { return failure_; }
++	std::optional<int32_t> currentPosition() const { return currentPosition_; }
++	std::optional<int32_t> bestPosition() const { return bestPosition_; }
++	const std::vector<AfPositionMetric> &metrics() const { return metrics_; }
++
++	static std::vector<int32_t> scanPositions(int32_t first, int32_t last,
++						  int32_t step);
++
++private:
++	enum class Phase {
++		Idle,
++		WaitLens,
++		Settle,
++		SettleAe,
++		Collect,
++		Confirm,
++		RestartWait,
++		Terminal,
++	};
++
++	enum class LensRole {
++		Initial,
++		Scan,
++		Winner,
++		Safe,
++	};
++
++	enum class ScanStage {
++		Coarse,
++		Fine,
++	};
++
++	struct LensRequest {
++		uint32_t frame;
++		int32_t position;
++		LensRole role;
++	};
++
++	void beginScan();
++	void requestLens(int32_t position, LensRole role);
++	void enterSettling(Phase next);
++	void startCoarseScan();
++	void finishPosition();
++	void finishScanStage();
++	void startWinnerConfirmation();
++	void finishConfirmation();
++	void fail(AfFailure failure);
++
++	AfFailure validateFrame(const AfFrameStats &stats) const;
++	AfFailure validateCurve(const std::vector<AfPositionMetric> &metrics) const;
++	AfPositionMetric aggregatePosition(int32_t position) const;
++
++	AfConfiguration configuration_;
++	bool configured_ = false;
++	AfStatus status_ = AfStatus::Idle;
++	AfFailure failure_ = AfFailure::None;
++	Phase phase_ = Phase::Idle;
++	Phase phaseAfterSettle_ = Phase::Idle;
++	ScanStage scanStage_ = ScanStage::Coarse;
++
++	std::optional<LensRequest> command_;
++	std::optional<LensRequest> pending_;
++	uint32_t nextCommandFrame_ = 0;
++	bool restartAfterPending_ = false;
++	bool cancelledPending_ = false;
++
++	std::optional<int32_t> currentPosition_;
++	std::optional<int32_t> bestPosition_;
++	double bestScore_ = 0.0;
++
++	unsigned int settleFramesRemaining_ = 0;
++	unsigned int aeFrames_ = 0;
++	unsigned int metricFrames_ = 0;
++	std::vector<double> aeHistory_;
++	std::vector<double> scores_;
++	std::vector<double> means_;
++	std::vector<double> clippedFractions_;
++	std::vector<double> exposures_;
++
++	std::vector<int32_t> activePositions_;
++	std::size_t activePosition_ = 0;
++	std::vector<AfPositionMetric> metrics_;
++
++};
++
++} /* namespace ipa::soft::algorithms */
++
++} /* namespace libcamera */
+diff --git a/src/ipa/simple/algorithms/meson.build b/src/ipa/simple/algorithms/meson.build
+index 73c63722..a120be3b 100644
+--- a/src/ipa/simple/algorithms/meson.build
++++ b/src/ipa/simple/algorithms/meson.build
+@@ -2,6 +2,8 @@
+ 
+ soft_simple_ipa_algorithms = files([
+     'adjust.cpp',
++    'af.cpp',
++    'af_state.cpp',
+     'awb.cpp',
+     'agc.cpp',
+     'blc.cpp',
+diff --git a/src/ipa/simple/ipa_context.h b/src/ipa/simple/ipa_context.h
+index 34f7403a..bb243ddd 100644
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -69,6 +69,8 @@ struct IPAFrameContext : public FrameContext {
+ 	struct {
+ 		int32_t exposure;
+ 		double gain;
++		int32_t appliedExposure;
++		double appliedGain;
+ 	} sensor;
+ 
+ 	struct {
+@@ -92,6 +94,7 @@ struct IPAContext {
+ 	IPAActiveState activeState;
+ 	FCQueue<IPAFrameContext> frameContexts;
+ 	ControlInfoMap::Map ctrlMap;
++	const ControlInfoMap *lensControls = nullptr;
+ 	bool ccmEnabled = false;
+ };
+ 
+diff --git a/src/ipa/simple/soft_simple.cpp b/src/ipa/simple/soft_simple.cpp
+index 91d3b75c..f44a70ea 100644
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -27,6 +27,7 @@
+ #include "libcamera/internal/yaml_parser.h"
+ 
+ #include "algorithms/adjust.h"
++#include "algorithms/af.h"
+ #include "libipa/camera_sensor_helper.h"
+ 
+ #include "module.h"
+@@ -56,6 +57,7 @@ public:
+ 		 const SharedFD &fdParams,
+ 		 const IPACameraSensorInfo &sensorInfo,
+ 		 const ControlInfoMap &sensorControls,
++		 const ControlInfoMap &lensControls,
+ 		 ControlInfoMap *ipaControls,
+ 		 bool *ccmEnabled) override;
+ 	int configure(const IPAConfigInfo &configInfo,
+@@ -76,12 +78,14 @@ protected:
+ 
+ private:
+ 	void updateExposure(double exposureMSV);
++	void emitLensCommand(uint32_t frame);
+ 
+ 	DebayerParams *params_;
+ 	SwIspStats *stats_;
+ 	std::unique_ptr<CameraSensorHelper> camHelper_;
+ 	ControlInfoMap sensorInfoMap_;
+ 	ControlInfoMap lensInfoMap_;
++	algorithms::Af *af_ = nullptr;
+ 
+ 	/* Local parameter storage */
+ 	struct IPAContext context_;
+@@ -100,6 +104,7 @@ int IPASoftSimple::init(const IPASettings &settings,
+ 			const SharedFD &fdParams,
+ 			const IPACameraSensorInfo &sensorInfo,
+ 			const ControlInfoMap &sensorControls,
++			const ControlInfoMap &lensControls,
+ 			ControlInfoMap *ipaControls,
+ 			bool *ccmEnabled)
+ {
+@@ -111,6 +116,7 @@ int IPASoftSimple::init(const IPASettings &settings,
+ 	}
+ 
+ 	context_.sensorInfo = sensorInfo;
++	context_.lensControls = &lensControls;
+ 
+ 	/* Load the tuning data file */
+ 	File file(settings.configurationFile);
+@@ -136,9 +142,22 @@ int IPASoftSimple::init(const IPASettings &settings,
+ 	}
+ 
+ 	int ret = createAlgorithms(context_, (*data)["algorithms"]);
++	context_.lensControls = nullptr;
+ 	if (ret)
+ 		return ret;
+ 
++	for (const auto &algorithm : algorithms()) {
++		auto *af = dynamic_cast<algorithms::Af *>(algorithm.get());
++		if (!af)
++			continue;
++		if (af_) {
++			LOG(IPASoft, Error)
++				<< "Tuning file contains more than one Af algorithm";
++			return -EINVAL;
++		}
++		af_ = af;
++	}
++
+ 	*ccmEnabled = context_.ccmEnabled;
+ 
+ 	params_ = nullptr;
+@@ -209,7 +228,7 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo,
+ 	sensorInfoMap_ = configInfo.sensorControls;
+ 	lensInfoMap_ = configInfo.lensControls;
+ 
+-	/* Phase 1 exposes no AF policy and can never request lens movement. */
++	/* Individual algorithms opt in to a validated raw lens interval below. */
+ 	*lensConfig = {};
+ 
+ 	const ControlInfo &exposureInfo = sensorInfoMap_.find(V4L2_CID_EXPOSURE)->second;
+@@ -264,6 +283,14 @@ int IPASoftSimple::configure(const IPAConfigInfo &configInfo,
+ 			return ret;
+ 	}
+ 
++	if (af_ && af_->available()) {
++		const algorithms::AfConfiguration &configuration =
++			af_->configuration();
++		lensConfig->enabled = true;
++		lensConfig->minimum = configuration.infinity;
++		lensConfig->maximum = configuration.macro;
++	}
++
+ 	LOG(IPASoft, Info)
+ 		<< "Exposure " << context_.configuration.agc.exposureMin << "-"
+ 		<< context_.configuration.agc.exposureMax
+@@ -281,6 +308,8 @@ int IPASoftSimple::start()
+ 
+ void IPASoftSimple::stop()
+ {
++	if (af_)
++		af_->resetSession();
+ 	context_.frameContexts.clear();
+ }
+ 
+@@ -290,6 +319,8 @@ void IPASoftSimple::queueRequest(const uint32_t frame, const ControlList &contro
+ 
+ 	for (const auto &algo : algorithms())
+ 		algo->queueRequest(context_, frame, frameContext, controls);
++
++	emitLensCommand(frame);
+ }
+ 
+ void IPASoftSimple::computeParams(const uint32_t frame)
+@@ -314,10 +345,13 @@ void IPASoftSimple::processStats(const uint32_t frame,
+ 		sensorControls.get(V4L2_CID_EXPOSURE).get<int32_t>();
+ 	int32_t again = sensorControls.get(V4L2_CID_ANALOGUE_GAIN).get<int32_t>();
+ 	frameContext.sensor.gain = camHelper_ ? camHelper_->gain(again) : again;
++	frameContext.sensor.appliedExposure = frameContext.sensor.exposure;
++	frameContext.sensor.appliedGain = frameContext.sensor.gain;
+ 
+ 	ControlList metadata(controls::controls);
+ 	for (const auto &algo : algorithms())
+ 		algo->process(context_, frame, frameContext, stats_, metadata);
++	emitLensCommand(frame);
+ 	metadataReady.emit(frame, metadata);
+ 
+ 	/* Sanity check */
+@@ -340,16 +374,18 @@ void IPASoftSimple::processStats(const uint32_t frame,
+ void IPASoftSimple::setLensPositionResult(uint32_t frame, int32_t position,
+ 					  int32_t result)
+ {
+-	if (result) {
+-		LOG(IPASoft, Error)
+-			<< "Raw lens command for frame " << frame
+-			<< " at position " << position
+-			<< " failed: " << result;
+-	} else {
+-		LOG(IPASoft, Debug)
+-			<< "Raw lens command for frame " << frame
+-			<< " applied at position " << position;
+-	}
++	if (af_)
++		af_->setLensPositionResult(frame, position, result);
++}
++
++void IPASoftSimple::emitLensCommand(uint32_t frame)
++{
++	if (!af_)
++		return;
++
++	const std::optional<int32_t> position = af_->takeLensCommand(frame);
++	if (position)
++		setLensPosition.emit(frame, *position);
+ }
+ 
+ std::string IPASoftSimple::logPrefix() const
+diff --git a/src/libcamera/software_isp/software_isp.cpp b/src/libcamera/software_isp/software_isp.cpp
+index b88c145b..40910303 100644
+--- a/src/libcamera/software_isp/software_isp.cpp
++++ b/src/libcamera/software_isp/software_isp.cpp
+@@ -22,6 +22,7 @@
+ #include <libcamera/stream.h>
+ 
+ #include "libcamera/internal/bayer_format.h"
++#include "libcamera/internal/camera_lens.h"
+ #include "libcamera/internal/framebuffer.h"
+ #include "libcamera/internal/software_isp/debayer_params.h"
+ 
+@@ -77,7 +78,7 @@ LOG_DEFINE_CATEGORY(SoftwareIsp)
+  * \param[out] ipaControls The IPA controls to update
+  * handler
+  */
+-SoftwareIsp::SoftwareIsp(PipelineHandler *pipe, const CameraSensor *sensor,
++SoftwareIsp::SoftwareIsp(PipelineHandler *pipe, CameraSensor *sensor,
+ 			 ControlInfoMap *ipaControls)
+ 	: ispWorkerThread_("SWIspWorker"),
+ 	  dmaHeap_(DmaBufAllocator::DmaBufAllocatorFlag::CmaHeap |
+@@ -154,6 +155,9 @@ SoftwareIsp::SoftwareIsp(PipelineHandler *pipe, const CameraSensor *sensor,
+ 			 sharedParams_.fd(),
+ 			 sensorInfo,
+ 			 sensor->controls(),
++			 sensor->focusLens()
++				 ? sensor->focusLens()->controls()
++				 : ControlInfoMap{},
+ 			 ipaControls,
+ 			 &ccmEnabled_);
+ 	if (ret) {
+diff --git a/src/libcamera/software_isp/swstats_cpu_focus.cpp b/src/libcamera/software_isp/swstats_cpu_focus.cpp
+index 865df2a6..121ebb10 100644
+--- a/src/libcamera/software_isp/swstats_cpu_focus.cpp
++++ b/src/libcamera/software_isp/swstats_cpu_focus.cpp
+@@ -114,6 +114,8 @@ void SwStatsCpuFocus::addSample(unsigned int bufferIndex, SwIspStats &stats,
+ 	const uint8_t value = std::min<unsigned int>(green >> rightShift, 255);
+ 	stats.focusGreenSum += value;
+ 	stats.focusGreenSamples++;
++	if (value <= 2 || value >= 253)
++		stats.focusClippedSamples++;
+ 
+ 	const auto accumulate = [&stats, value](uint8_t neighbour) {
+ 		const int32_t difference = static_cast<int32_t>(value) - neighbour;
+@@ -154,6 +156,7 @@ void SwStatsCpuFocus::reset(SwIspStats &stats)
+ 	stats.focusGradientSamples = 0;
+ 	stats.focusGreenSum = 0;
+ 	stats.focusGreenSamples = 0;
++	stats.focusClippedSamples = 0;
+ }
+ 
+ void SwStatsCpuFocus::merge(SwIspStats &destination,
+@@ -170,6 +173,7 @@ void SwStatsCpuFocus::merge(SwIspStats &destination,
+ 		destination.focusGradientSamples += source.focusGradientSamples;
+ 		destination.focusGreenSum += source.focusGreenSum;
+ 		destination.focusGreenSamples += source.focusGreenSamples;
++		destination.focusClippedSamples += source.focusClippedSamples;
+ 
+ 		if (!state.hasLines)
+ 			continue;
+diff --git a/test/meson.build b/test/meson.build
+index af99aaaa..42a7471f 100644
+--- a/test/meson.build
++++ b/test/meson.build
+@@ -68,6 +68,17 @@ internal_tests = [
+     {'name': 'pixel-format', 'sources': ['pixel-format.cpp']},
+     {'name': 'shared-fd', 'sources': ['shared-fd.cpp']},
+     {'name': 'simple-pipeline-lens', 'sources': ['simple-pipeline-lens.cpp']},
++    {'name': 'simple-ipa-af',
++     'sources': [
++         'simple-ipa-af.cpp',
++         '../src/ipa/simple/algorithms/af.cpp',
++         '../src/ipa/simple/algorithms/af_state.cpp',
++     ],
++     'dependencies': [libipa_dep],
++     'include_directories': [
++         include_directories('../src/ipa/simple'),
++         include_directories('../include/libcamera/ipa'),
++     ]},
+     {'name': 'signal-threads', 'sources': ['signal-threads.cpp']},
+     {'name': 'swstats-cpu-focus', 'sources': ['swstats-cpu-focus.cpp']},
+     {'name': 'threads', 'sources': 'threads.cpp', 'dependencies': [libthreads]},
+@@ -106,12 +117,16 @@ foreach test : internal_tests
+     if 'dependencies' in test
+         deps += test['dependencies']
+     endif
++    includes = test_includes_internal
++    if 'include_directories' in test
++        includes += test['include_directories']
++    endif
+ 
+     exe = executable(test['name'], test['sources'],
+                      dependencies : deps,
+                      implicit_include_directories : false,
+                      link_with : test_libraries,
+-                     include_directories : test_includes_internal)
++                     include_directories : includes)
+ 
+     test(test['name'], exe, should_fail : test.get('should_fail', false))
+ endforeach
+diff --git a/test/simple-ipa-af.cpp b/test/simple-ipa-af.cpp
+new file mode 100644
+index 00000000..d9380b5e
+--- /dev/null
++++ b/test/simple-ipa-af.cpp
+@@ -0,0 +1,479 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright (C) 2026, Kostiantyn Andriiuk
++ *
++ * Simple IPA bounded one-shot autofocus tests
++ */
++
++#include <cmath>
++#include <errno.h>
++#include <functional>
++#include <iostream>
++#include <memory>
++#include <optional>
++#include <vector>
++
++#include <linux/v4l2-controls.h>
++
++#include <libcamera/control_ids.h>
++#include <libcamera/controls.h>
++
++#include "libcamera/internal/value_node.h"
++
++#include "../src/ipa/simple/algorithms/af.h"
++
++#include "test.h"
++
++using namespace libcamera;
++using namespace libcamera::ipa::soft;
++using namespace libcamera::ipa::soft::algorithms;
++using namespace std;
++
++namespace {
++
++AfConfiguration configuration()
++{
++	return {
++		.infinity = 242,
++		.macro = 726,
++		.coarseStep = 48,
++		.fineStep = 8,
++		.settleFrames = 2,
++		.metricFrames = 3,
++		.aeMinimumFrames = 12,
++		.aeWindowFrames = 12,
++		.aeMaximumFrames = 180,
++		.maximumMetricFrames = 60,
++		.aeMaximumRatio = 1.05,
++		.maximumExposureRatio = 1.25,
++		.minimumFocusSpread = 0.05,
++		.minimumMean = 8.0,
++		.maximumMean = 247.0,
++		.maximumClippedFraction = 0.30,
++		.minimumScore = 0.01,
++		.confirmationMinimumRatio = 0.80,
++		.confirmationMaximumRatio = 1.25,
++	};
++}
++
++unique_ptr<ValueNode> tuningData()
++{
++	const AfConfiguration config = configuration();
++	auto data = make_unique<ValueNode>();
++
++	data->add("infinity", make_unique<ValueNode>(config.infinity));
++	data->add("macro", make_unique<ValueNode>(config.macro));
++	data->add("coarseStep", make_unique<ValueNode>(config.coarseStep));
++	data->add("fineStep", make_unique<ValueNode>(config.fineStep));
++	data->add("settleFrames", make_unique<ValueNode>(config.settleFrames));
++	data->add("metricFrames", make_unique<ValueNode>(config.metricFrames));
++	data->add("aeMinimumFrames",
++		  make_unique<ValueNode>(config.aeMinimumFrames));
++	data->add("aeWindowFrames",
++		  make_unique<ValueNode>(config.aeWindowFrames));
++	data->add("aeMaximumFrames",
++		  make_unique<ValueNode>(config.aeMaximumFrames));
++	data->add("maximumMetricFrames",
++		  make_unique<ValueNode>(config.maximumMetricFrames));
++	data->add("aeMaximumRatio",
++		  make_unique<ValueNode>(config.aeMaximumRatio));
++	data->add("maximumExposureRatio",
++		  make_unique<ValueNode>(config.maximumExposureRatio));
++	data->add("minimumFocusSpread",
++		  make_unique<ValueNode>(config.minimumFocusSpread));
++	data->add("minimumMean", make_unique<ValueNode>(config.minimumMean));
++	data->add("maximumMean", make_unique<ValueNode>(config.maximumMean));
++	data->add("maximumClippedFraction",
++		  make_unique<ValueNode>(config.maximumClippedFraction));
++	data->add("minimumScore", make_unique<ValueNode>(config.minimumScore));
++	data->add("confirmationMinimumRatio",
++		  make_unique<ValueNode>(config.confirmationMinimumRatio));
++	data->add("confirmationMaximumRatio",
++		  make_unique<ValueNode>(config.confirmationMaximumRatio));
++
++	return data;
++}
++
++AfFrameStats frameStats(int32_t position, uint32_t frame,
++			double exposureProduct = 1000.0)
++{
++	const double distance = std::abs(position - 538);
++	return {
++		.valid = frame % 4 == 0,
++		.complete = true,
++		.score = 0.12 - distance * 0.00015,
++		.mean = 80.0,
++		.clippedFraction = 0.0,
++		.exposureProduct = exposureProduct,
++		.exposure = static_cast<int32_t>(exposureProduct),
++		.gain = 1.0,
++	};
++}
++
++struct DriveResult {
++	vector<int32_t> commands;
++	uint32_t nextFrame = 1;
++};
++
++using StatsFactory =
++	function<AfFrameStats(int32_t position, uint32_t frame)>;
++using LensResult =
++	function<int(int32_t position, const vector<int32_t> &commands)>;
++
++DriveResult drive(AfStateMachine &machine, unsigned int maximumFrames,
++		  StatsFactory statsFactory,
++		  LensResult lensResult = {})
++{
++	DriveResult result;
++	int32_t position = 242;
++
++	for (unsigned int iteration = 0;
++	     iteration < maximumFrames &&
++	     machine.status() == AfStatus::Scanning;
++	     ++iteration, ++result.nextFrame) {
++		const optional<int32_t> command =
++			machine.takeLensCommand(result.nextFrame);
++		if (command) {
++			result.commands.push_back(*command);
++			const int ret = lensResult
++					      ? lensResult(*command,
++							   result.commands)
++					      : 0;
++			if (!ret)
++				position = *command;
++			if (!machine.setLensPositionResult(result.nextFrame,
++							   *command, ret))
++				break;
++			continue;
++		}
++
++		machine.process(statsFactory(position, result.nextFrame));
++	}
++
++	/*
++	 * A Failed state can still have one queued best-effort safe-infinity
++	 * command. Consume it without changing the terminal state.
++	 */
++	if (const optional<int32_t> command =
++		    machine.takeLensCommand(result.nextFrame)) {
++		result.commands.push_back(*command);
++		machine.setLensPositionResult(result.nextFrame, *command, 0);
++	}
++
++	return result;
++}
++
++bool allBounded(const vector<int32_t> &commands)
++{
++	for (int32_t position : commands) {
++		if (position < 242 || position > 726)
++			return false;
++	}
++	return true;
++}
++
++class SimpleIpaAfTest : public Test
++{
++protected:
++	int run() override
++	{
++		if (!testConfiguration() || !testAlgorithmOptIn() ||
++		    !testSuccess() ||
++		    !testCancel() || !testLensFailure() ||
++		    !testSceneFailures() || !testExposureFailures() ||
++		    !testProtocolFailure())
++			return TestFail;
++
++		return TestPass;
++	}
++
++	bool testAlgorithmOptIn()
++	{
++		Control<int32_t> focus(V4L2_CID_FOCUS_ABSOLUTE, "Focus",
++				       "v4l2", ControlId::Direction::In);
++		ControlIdMap idMap{ { V4L2_CID_FOCUS_ABSOLUTE, &focus } };
++		ControlInfoMap lensControls(
++			{ { &focus, ControlInfo(0, 726, 214) } }, idMap);
++
++		IPAContext context(16);
++		context.lensControls = &lensControls;
++		Af algorithm;
++		unique_ptr<ValueNode> tuning = tuningData();
++		if (algorithm.init(context, *tuning) || !algorithm.available() ||
++		    context.ctrlMap.count(&controls::AfMode) != 1 ||
++		    context.ctrlMap.count(&controls::AfTrigger) != 1) {
++			cerr << "Valid lens and tuning did not advertise AF" << endl;
++			return false;
++		}
++
++		const ControlInfo &modes = context.ctrlMap.at(&controls::AfMode);
++		if (modes.values().size() != 1 ||
++		    modes.values().front().get<int32_t>() !=
++			    controls::AfModeAuto) {
++			cerr << "AF advertised unsupported modes" << endl;
++			return false;
++		}
++
++		IPAContext noLensContext(16);
++		Af noLensAlgorithm;
++		tuning = tuningData();
++		if (noLensAlgorithm.init(noLensContext, *tuning) ||
++		    noLensAlgorithm.available() ||
++		    !noLensContext.ctrlMap.empty()) {
++			cerr << "AF did not stay inert without a linked lens" << endl;
++			return false;
++		}
++
++		IPAContext shortLensContext(16);
++		ControlInfoMap shortLens(
++			{ { &focus, ControlInfo(0, 517, 214) } }, idMap);
++		shortLensContext.lensControls = &shortLens;
++		Af shortLensAlgorithm;
++		tuning = tuningData();
++		if (shortLensAlgorithm.init(shortLensContext, *tuning) ||
++		    shortLensAlgorithm.available()) {
++			cerr << "AF accepted a kernel range below macro" << endl;
++			return false;
++		}
++
++		return true;
++	}
++
++private:
++	bool testConfiguration()
++	{
++		AfConfiguration config = configuration();
++		if (!config.valid()) {
++			cerr << "Accepted Vince configuration is invalid" << endl;
++			return false;
++		}
++
++		config.macro = config.infinity;
++		if (config.valid()) {
++			cerr << "Empty focus interval was accepted" << endl;
++			return false;
++		}
++
++		if (AfStateMachine::scanPositions(242, 726, 48) !=
++		    vector<int32_t>{ 242, 290, 338, 386, 434, 482,
++				     530, 578, 626, 674, 722, 726 } ||
++		    !AfStateMachine::scanPositions(726, 242, 8).empty()) {
++			cerr << "Bounded endpoint generation is wrong" << endl;
++			return false;
++		}
++
++		return true;
++	}
++
++	bool testSuccess()
++	{
++		AfStateMachine machine;
++		if (machine.configure(configuration())) {
++			cerr << "Valid AF configuration failed" << endl;
++			return false;
++		}
++
++		machine.start();
++		machine.start();
++		const DriveResult result = drive(
++			machine, 2000,
++			[](int32_t position, uint32_t frame) {
++				return frameStats(position, frame);
++			});
++
++		if (machine.status() != AfStatus::Focused ||
++		    machine.failure() != AfFailure::None ||
++		    machine.bestPosition() != 538 ||
++		    machine.currentPosition() != 538 ||
++		    machine.metrics().size() != 22 ||
++		    result.commands.empty() || !allBounded(result.commands)) {
++			cerr << "Successful coarse/fine scan result is wrong" << endl;
++			return false;
++		}
++
++		return true;
++	}
++
++	bool testCancel()
++	{
++		AfStateMachine machine;
++		machine.configure(configuration());
++		machine.start();
++
++		const optional<int32_t> command = machine.takeLensCommand(1);
++		if (!command || *command != 242) {
++			cerr << "Initial infinity command is missing" << endl;
++			return false;
++		}
++
++		machine.cancel();
++		if (machine.status() != AfStatus::Idle ||
++		    machine.takeLensCommand(2) ||
++		    !machine.setLensPositionResult(1, 242, 0) ||
++		    machine.currentPosition() != 242 ||
++		    machine.takeLensCommand(3)) {
++			cerr << "Cancel issued an unrelated movement" << endl;
++			return false;
++		}
++
++		return true;
++	}
++
++	bool testLensFailure()
++	{
++		AfStateMachine machine;
++		machine.configure(configuration());
++		machine.start();
++
++		const DriveResult result = drive(
++			machine, 1000,
++			[](int32_t position, uint32_t frame) {
++				return frameStats(position, frame);
++			},
++			[](int32_t position, const vector<int32_t> &) {
++				return position == 338 ? -EIO : 0;
++			});
++
++		if (machine.status() != AfStatus::Failed ||
++		    machine.failure() != AfFailure::Lens ||
++		    result.commands.size() < 2 ||
++		    result.commands.back() != 242 ||
++		    machine.currentPosition() != 242 ||
++		    !allBounded(result.commands)) {
++			cerr << "Lens failure did not fail safe at infinity" << endl;
++			return false;
++		}
++
++		return true;
++	}
++
++	bool testSceneFailures()
++	{
++		struct Case {
++			AfFailure expected;
++			StatsFactory factory;
++		};
++
++		const vector<Case> cases{
++			{
++				AfFailure::Incomplete,
++				[](int32_t position, uint32_t frame) {
++					AfFrameStats stats =
++						frameStats(position, frame);
++					if (stats.valid)
++						stats.complete = false;
++					return stats;
++				},
++			},
++			{
++				AfFailure::Dark,
++				[](int32_t position, uint32_t frame) {
++					AfFrameStats stats =
++						frameStats(position, frame);
++					stats.mean = 2.0;
++					return stats;
++				},
++			},
++			{
++				AfFailure::Clipped,
++				[](int32_t position, uint32_t frame) {
++					AfFrameStats stats =
++						frameStats(position, frame);
++					stats.clippedFraction = 0.5;
++					return stats;
++				},
++			},
++			{
++				AfFailure::Flat,
++				[](int32_t position, uint32_t frame) {
++					AfFrameStats stats =
++						frameStats(position, frame);
++					stats.score = 0.005;
++					return stats;
++				},
++			},
++		};
++
++		for (const Case &test : cases) {
++			AfStateMachine machine;
++			machine.configure(configuration());
++			machine.start();
++			const DriveResult result =
++				drive(machine, 1000, test.factory);
++			if (machine.status() != AfStatus::Failed ||
++			    machine.failure() != test.expected ||
++			    result.commands.empty() ||
++			    result.commands.back() != 242) {
++				cerr << "Scene rejection failed for "
++				     << afFailureName(test.expected) << endl;
++				return false;
++			}
++		}
++
++		return true;
++	}
++
++	bool testExposureFailures()
++	{
++		AfConfiguration config = configuration();
++		config.aeMinimumFrames = 12;
++		config.aeWindowFrames = 12;
++		config.aeMaximumFrames = 16;
++
++		AfStateMachine timeout;
++		timeout.configure(config);
++		timeout.start();
++		const DriveResult timeoutResult = drive(
++			timeout, 100,
++			[](int32_t position, uint32_t frame) {
++				return frameStats(position, frame,
++						  frame % 2 ? 1000.0 : 2000.0);
++			});
++		if (timeout.status() != AfStatus::Failed ||
++		    timeout.failure() != AfFailure::Timeout ||
++		    timeoutResult.commands.back() != 242) {
++			cerr << "AE convergence timeout was not rejected" << endl;
++			return false;
++		}
++
++		AfStateMachine drift;
++		drift.configure(configuration());
++		drift.start();
++		const DriveResult driftResult = drive(
++			drift, 1500,
++			[](int32_t position, uint32_t frame) {
++				const double exposure =
++					position == 242 ? 1000.0 : 1400.0;
++				return frameStats(position, frame, exposure);
++			});
++		if (drift.status() != AfStatus::Failed ||
++		    drift.failure() != AfFailure::Exposure ||
++		    driftResult.commands.back() != 242) {
++			cerr << "Whole-scan exposure drift was not rejected" << endl;
++			return false;
++		}
++
++		return true;
++	}
++
++	bool testProtocolFailure()
++	{
++		AfStateMachine machine;
++		machine.configure(configuration());
++		machine.start();
++		const optional<int32_t> command = machine.takeLensCommand(10);
++		if (!command ||
++		    machine.setLensPositionResult(11, *command, 0) ||
++		    machine.status() != AfStatus::Failed ||
++		    machine.failure() != AfFailure::Protocol) {
++			cerr << "Mismatched lens acknowledgement was accepted" << endl;
++			return false;
++		}
++
++		return true;
++	}
++};
++
++} /* namespace */
++
++TEST_REGISTER(SimpleIpaAfTest)
+diff --git a/test/swstats-cpu-focus.cpp b/test/swstats-cpu-focus.cpp
+index 363d3bbd..74cca302 100644
+--- a/test/swstats-cpu-focus.cpp
++++ b/test/swstats-cpu-focus.cpp
+@@ -74,7 +74,8 @@ bool checkSharedStats(SwStatsCpu &stats)
+ 
+ 	return result.valid && result.focusGradientSum == 260100 &&
+ 	       result.focusGradientSamples == 4 &&
+-	       result.focusGreenSum == 510 && result.focusGreenSamples == 4;
++	       result.focusGreenSum == 510 && result.focusGreenSamples == 4 &&
++	       result.focusClippedSamples == 4;
+ }
+ 
+ template<typename Pixel>
+@@ -192,16 +193,21 @@ protected:
+ 		if (sharp.focusGradientSum != 260100 ||
+ 		    sharp.focusGradientSamples != 4 ||
+ 		    sharp.focusGreenSum != 510 || sharp.focusGreenSamples != 4 ||
++		    sharp.focusClippedSamples != 4 ||
+ 		    soft.focusGradientSum != 4096 ||
+ 		    soft.focusGradientSamples != 4 ||
++		    soft.focusClippedSamples != 2 ||
+ 		    flat.focusGradientSum != 0 ||
+ 		    flat.focusGradientSamples != 4 ||
++		    flat.focusClippedSamples != 4 ||
+ 		    dark.focusGradientSum != 4 ||
+ 		    dark.focusGradientSamples != 4 ||
++		    dark.focusClippedSamples != 4 ||
+ 		    clipped.focusGradientSum != sharp.focusGradientSum ||
+ 		    clipped.focusGradientSamples != sharp.focusGradientSamples ||
+ 		    clipped.focusGreenSum != sharp.focusGreenSum ||
+-		    clipped.focusGreenSamples != sharp.focusGreenSamples) {
++		    clipped.focusGreenSamples != sharp.focusGreenSamples ||
++		    clipped.focusClippedSamples != sharp.focusClippedSamples) {
+ 			cerr << "Sharp, soft, flat, dark or clipped metric is wrong" << endl;
+ 			return TestFail;
+ 		}
+@@ -234,7 +240,8 @@ protected:
+ 		    merged.focusGradientSum != 60000 ||
+ 		    merged.focusGradientSamples != 4 ||
+ 		    merged.focusGreenSum != 300 ||
+-		    merged.focusGreenSamples != 4) {
++		    merged.focusGreenSamples != 4 ||
++		    merged.focusClippedSamples != 2) {
+ 			cerr << "Per-buffer state or merge is wrong" << endl;
+ 			return TestFail;
+ 		}
+@@ -244,6 +251,7 @@ protected:
+ 		SwStatsCpuFocus::reset(first);
+ 		if (first.focusGradientSum || first.focusGradientSamples ||
+ 		    first.focusGreenSum || first.focusGreenSamples ||
++		    first.focusClippedSamples ||
+ 		    first.sum_.r() != 1 || first.sum_.g() != 2 ||
+ 		    first.sum_.b() != 3 || first.yHistogram[0] != 7) {
+ 			cerr << "Focus reset changed existing statistics" << endl;
+-- 
+2.43.0
+

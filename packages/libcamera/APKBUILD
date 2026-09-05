@@ -1,0 +1,107 @@
+# Contributor: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+maintainer="Kostiantyn Andriiuk <konstantin@andriyuk.com>"
+pkgname=libcamera
+pkgver=99991.7.1
+pkgrel=3
+_realver=0.7.1
+pkgdesc="Linux camera framework with handset-local Vince one-shot autofocus"
+url="https://libcamera.org/"
+arch="aarch64"
+license="LGPL-2.1-or-later AND GPL-2.0-or-later"
+depends="$pkgname-ipa=$pkgver-r$pkgrel"
+makedepends="
+	coreutils
+	eudev-dev
+	libevent-dev
+	libyuv-dev
+	linux-headers
+	meson
+	openssl-dev
+	py3-jinja2
+	py3-ply
+	py3-yaml
+	yaml-dev
+	"
+subpackages="
+	$pkgname-dev
+	$pkgname-ipa:ipa
+	$pkgname-tools:tools
+	$pkgname-v4l2:v4l2
+	"
+source="
+	https://gitlab.freedesktop.org/camera/libcamera/-/archive/v$_realver/libcamera-v$_realver.tar.gz
+	../../patches/libcamera/0001-simple-raw-lens-plumbing.patch
+	../../patches/libcamera/0002-software-isp-add-focus-statistics.patch
+	../../patches/libcamera/0003-simple-ipa-bounded-one-shot-af.patch
+	../../patches/libcamera/0004-simple-ipa-advertise-afstate.patch
+	../../patches/libcamera/0005-software-isp-guard-late-lens-callbacks.patch
+	../../patches/libcamera/0006-ipa-simple-guard-malformed-sensor-controls.patch
+	"
+builddir="$srcdir/libcamera-v$_realver"
+# IPA signatures cover the final stripped module, so strip manually first.
+options="!strip !check"
+export SOURCE_DATE_EPOCH=1788589860
+
+build() {
+	abuild-meson \
+		-Dpipelines=simple \
+		-Dipas=simple \
+		-Dv4l2=enabled \
+		-Dgstreamer=disabled \
+		-Dqcam=disabled \
+		-Dcam=enabled \
+		-Dlc-compliance=disabled \
+		-Ddocumentation=disabled \
+		-Dpycamera=disabled \
+		-Dtest=false \
+		-Dwerror=true \
+		. output
+	meson compile -C output -j 4
+}
+
+package() {
+	DESTDIR="$pkgdir" meson install --no-rebuild -C output
+
+	scanelf --recursive \
+		--nobanner \
+		--etype "ET_DYN,ET_EXEC" \
+		--format "%F" \
+		"$pkgdir" \
+		| while read -r file; do
+			strip "$file"
+		done
+}
+
+ipa() {
+	depends=""
+	amove usr/lib/libcamera
+
+	local ipa
+	for ipa in "$subpkgdir"/usr/lib/libcamera/ipa/ipa*.so; do
+		msg "signing $ipa"
+		"$builddir"/src/ipa/ipa-sign.sh \
+			"$(find "$builddir"/output -type f -iname "*ipa-priv-key.pem")" \
+			"$ipa" \
+			"$ipa".sign
+	done
+}
+
+tools() {
+	depends="$pkgname=$pkgver-r$pkgrel"
+	amove usr/bin/cam
+}
+
+v4l2() {
+	depends="$pkgname=$pkgver-r$pkgrel"
+	amove usr/libexec/libcamera/v4l2-compat.so
+}
+
+sha512sums="
+0e886021a3bbd668184b581248b9d89a8e909360a7f138237a2c03b41b477cb255bd6daf4932fdebf86c3410b4deccc4c5db93264ed0c6c9969076cdbae8a77b  libcamera-v0.7.1.tar.gz
+7d32adfaa78a02833836c54ea83ce64d3d6f78e95a3f30c4954dc1a0272fc2f5b283382774db87185b37a22b1ad3d355ba66bcb38d4a305f0b6b3edce9818bf1  ../../patches/libcamera/0001-simple-raw-lens-plumbing.patch
+62266e811a24ab36395b41f934e53c5d7387a5a39b3ab06035950dea7cb4964557bbcb23d033e7cf75605fdfb04ba78a185d6b6d2f1e3281d3acd23b2fe76209  ../../patches/libcamera/0002-software-isp-add-focus-statistics.patch
+5054b5608e6781b1cd8c4ab1147dfcc0f904473fd16d2a97dbfced2147b129974a35ecc1961b472850ad66561f7d32d778f6f1ed7a7c65625355e115fbf26c84  ../../patches/libcamera/0003-simple-ipa-bounded-one-shot-af.patch
+c6c068a301ef6e7dbe024085573f92a3ae75bea68b395d7bf4ca128031e65844deb8e39b1404a4ea0677926b0e9782d011e502e08a2a554393eaab07086b36b2  ../../patches/libcamera/0004-simple-ipa-advertise-afstate.patch
+9fb50f49d60d638c4ee7833918aceae174f3b8dfc72e6669014141fc60feb4f8256132fc182c7ec725c497571cd429af3b5bd06bc529406cc3c563f03e08a875  ../../patches/libcamera/0005-software-isp-guard-late-lens-callbacks.patch
+bbcee713208a1b67008caefea32f437352300f4e462502367ef7bb6e3a138c8a84d85e28078328476df69e55ba0229cf4cac597edfc2e57f356648815923b722  ../../patches/libcamera/0006-ipa-simple-guard-malformed-sensor-controls.patch
+"

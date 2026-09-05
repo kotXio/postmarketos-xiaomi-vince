@@ -7,5 +7,6 @@ limitations for each hardware or software area.
 - [RMI4 failed-suspend touch guard](rmi4-touch-guard.md)
 - [OV12A10 rear camera](ov12a10-camera.md)
 - [DW9763 bounded manual focus](dw9763-manual-focus.md)
+- [OV12A10 one-shot autofocus](ov12a10-autofocus.md)
 - [Angelfish rendering workaround](angelfish-rendering.md)
 - [Qt WebEngine hardware-video investigation](hardware-video.md)

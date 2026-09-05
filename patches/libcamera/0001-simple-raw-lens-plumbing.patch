@@ -1,0 +1,758 @@
+From 2254daebe772dd9fd11d59b17207d07fc53c4cfd Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Fri, 4 Sep 2026 09:26:44 +0300
+Subject: [PATCH] pipeline: simple: add guarded raw lens plumbing
+
+---
+ include/libcamera/internal/meson.build        |   1 +
+ .../libcamera/internal/simple_pipeline_lens.h |  54 ++++++
+ .../internal/software_isp/software_isp.h      |   7 +-
+ include/libcamera/ipa/soft.mojom              |  12 +-
+ src/ipa/simple/soft_simple.cpp                |  28 ++-
+ src/libcamera/meson.build                     |   1 +
+ src/libcamera/pipeline/simple/simple.cpp      |  58 +++++-
+ src/libcamera/simple_pipeline_lens.cpp        | 116 ++++++++++++
+ src/libcamera/software_isp/software_isp.cpp   |  18 +-
+ test/meson.build                              |   1 +
+ test/simple-pipeline-lens.cpp                 | 178 ++++++++++++++++++
+ 11 files changed, 463 insertions(+), 11 deletions(-)
+ create mode 100644 include/libcamera/internal/simple_pipeline_lens.h
+ create mode 100644 src/libcamera/simple_pipeline_lens.cpp
+ create mode 100644 test/simple-pipeline-lens.cpp
+
+diff --git a/include/libcamera/internal/meson.build b/include/libcamera/internal/meson.build
+index fd375134..4e307f64 100644
+--- a/include/libcamera/internal/meson.build
++++ b/include/libcamera/internal/meson.build
+@@ -41,6 +41,7 @@ libcamera_internal_headers = files([
+     'pub_key.h',
+     'request.h',
+     'shared_mem_object.h',
++    'simple_pipeline_lens.h',
+     'source_paths.h',
+     'sysfs.h',
+     'v4l2_device.h',
+diff --git a/include/libcamera/internal/simple_pipeline_lens.h b/include/libcamera/internal/simple_pipeline_lens.h
+new file mode 100644
+index 00000000..efb8e153
+--- /dev/null
++++ b/include/libcamera/internal/simple_pipeline_lens.h
+@@ -0,0 +1,54 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * Copyright (C) 2026, Kostik
++ *
++ * Validated raw lens-command plumbing for the Simple pipeline
++ */
++
++#pragma once
++
++#include <functional>
++#include <optional>
++#include <stdint.h>
++
++#include <libcamera/base/class.h>
++
++#include <libcamera/controls.h>
++
++namespace libcamera {
++
++class SimplePipelineLens
++{
++public:
++	using SetPosition = std::function<int(int32_t)>;
++
++	SimplePipelineLens() = default;
++
++	int configure(const ControlInfoMap &kernelControls, bool enabled,
++		      int32_t minimum, int32_t maximum,
++		      SetPosition setPosition);
++
++	/* The frame identifies the statistics decision that caused the command. */
++	int setPosition(uint32_t frame, int32_t position);
++
++	void reset();
++	void resetSession();
++
++	bool enabled() const { return enabled_; }
++	std::optional<int32_t> position() const { return position_; }
++
++private:
++	LIBCAMERA_DISABLE_COPY_AND_MOVE(SimplePipelineLens)
++
++	bool enabled_ = false;
++	int32_t minimum_ = 0;
++	int32_t maximum_ = 0;
++	SetPosition setPosition_;
++
++	std::optional<uint32_t> lastFrame_;
++	std::optional<int32_t> lastRequestedPosition_;
++	std::optional<int32_t> position_;
++	int lastResult_ = 0;
++};
++
++} /* namespace libcamera */
+diff --git a/include/libcamera/internal/software_isp/software_isp.h b/include/libcamera/internal/software_isp/software_isp.h
+index 585e0d6d..602da62c 100644
+--- a/include/libcamera/internal/software_isp/software_isp.h
++++ b/include/libcamera/internal/software_isp/software_isp.h
+@@ -65,7 +65,8 @@ public:
+ 
+ 	int configure(const StreamConfiguration &inputCfg,
+ 		      const std::vector<std::reference_wrapper<const StreamConfiguration>> &outputCfgs,
+-		      const ipa::soft::IPAConfigInfo &configInfo);
++		      const ipa::soft::IPAConfigInfo &configInfo,
++		      ipa::soft::IPARawLensConfig *lensConfig);
+ 
+ 	int exportBuffers(const Stream *stream, unsigned int count,
+ 			  std::vector<std::unique_ptr<FrameBuffer>> *buffers);
+@@ -79,6 +80,8 @@ public:
+ 	void queueRequest(const uint32_t frame, const ControlList &controls);
+ 	int queueBuffers(uint32_t frame, FrameBuffer *input,
+ 			 const std::map<const Stream *, FrameBuffer *> &outputs);
++	void setLensPositionResult(uint32_t frame, int32_t position,
++				   int32_t result);
+ 
+ 	void process(uint32_t frame, FrameBuffer *input, FrameBuffer *output);
+ 
+@@ -87,10 +90,12 @@ public:
+ 	Signal<uint32_t, uint32_t> ispStatsReady;
+ 	Signal<uint32_t, const ControlList &> metadataReady;
+ 	Signal<const ControlList &> setSensorControls;
++	Signal<uint32_t, int32_t> setLensPosition;
+ 
+ private:
+ 	void saveIspParams();
+ 	void setSensorCtrls(const ControlList &sensorControls);
++	void setLensPositionFromIpa(uint32_t frame, int32_t position);
+ 	void statsReady(uint32_t frame, uint32_t bufferId);
+ 	void inputReady(FrameBuffer *input);
+ 	void outputReady(FrameBuffer *output);
+diff --git a/include/libcamera/ipa/soft.mojom b/include/libcamera/ipa/soft.mojom
+index 77328c5f..3240e5ca 100644
+--- a/include/libcamera/ipa/soft.mojom
++++ b/include/libcamera/ipa/soft.mojom
+@@ -8,8 +8,15 @@ module ipa.soft;
+ 
+ import "include/libcamera/ipa/core.mojom";
+ 
++struct IPARawLensConfig {
++	bool enabled;
++	int32 minimum;
++	int32 maximum;
++};
++
+ struct IPAConfigInfo {
+ 	libcamera.ControlInfoMap sensorControls;
++	libcamera.ControlInfoMap lensControls;
+ };
+ 
+ interface IPASoftInterface {
+@@ -22,17 +29,20 @@ interface IPASoftInterface {
+ 	start() => (int32 ret);
+ 	stop();
+ 	configure(IPAConfigInfo configInfo)
+-		=> (int32 ret);
++		=> (int32 ret, IPARawLensConfig lensConfig);
+ 
+ 	[async] queueRequest(uint32 frame, libcamera.ControlList sensorControls);
+ 	[async] computeParams(uint32 frame);
+ 	[async] processStats(uint32 frame,
+ 			     uint32 bufferId,
+ 			     libcamera.ControlList sensorControls);
++	[async] setLensPositionResult(uint32 frame, int32 position,
++				      int32 result);
+ };
+ 
+ interface IPASoftEventInterface {
+ 	setSensorControls(libcamera.ControlList sensorControls);
++	setLensPosition(uint32 frame, int32 position);
+ 	setIspParams();
+ 	metadataReady(uint32 frame, libcamera.ControlList metadata);
+ };
+diff --git a/src/ipa/simple/soft_simple.cpp b/src/ipa/simple/soft_simple.cpp
+index 629e1a32..91d3b75c 100644
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -58,7 +58,8 @@ public:
+ 		 const ControlInfoMap &sensorControls,
+ 		 ControlInfoMap *ipaControls,
+ 		 bool *ccmEnabled) override;
+-	int configure(const IPAConfigInfo &configInfo) override;
++	int configure(const IPAConfigInfo &configInfo,
++		      IPARawLensConfig *lensConfig) override;
+ 
+ 	int start() override;
+ 	void stop() override;
+@@ -67,6 +68,8 @@ public:
+ 	void computeParams(const uint32_t frame) override;
+ 	void processStats(const uint32_t frame, const uint32_t bufferId,
+ 			  const ControlList &sensorControls) override;
++	void setLensPositionResult(uint32_t frame, int32_t position,
++				   int32_t result) override;
+ 
+ protected:
+ 	std::string logPrefix() const override;
+@@ -78,6 +81,7 @@ private:
+ 	SwIspStats *stats_;
+ 	std::unique_ptr<CameraSensorHelper> camHelper_;
+ 	ControlInfoMap sensorInfoMap_;
++	ControlInfoMap lensInfoMap_;
+ 
+ 	/* Local parameter storage */
+ 	struct IPAContext context_;
+@@ -199,9 +203,14 @@ int IPASoftSimple::init(const IPASettings &settings,
+ 	return 0;
+ }
+ 
+-int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
++int IPASoftSimple::configure(const IPAConfigInfo &configInfo,
++			     IPARawLensConfig *lensConfig)
+ {
+ 	sensorInfoMap_ = configInfo.sensorControls;
++	lensInfoMap_ = configInfo.lensControls;
++
++	/* Phase 1 exposes no AF policy and can never request lens movement. */
++	*lensConfig = {};
+ 
+ 	const ControlInfo &exposureInfo = sensorInfoMap_.find(V4L2_CID_EXPOSURE)->second;
+ 	const ControlInfo &gainInfo = sensorInfoMap_.find(V4L2_CID_ANALOGUE_GAIN)->second;
+@@ -328,6 +337,21 @@ void IPASoftSimple::processStats(const uint32_t frame,
+ 	setSensorControls.emit(ctrls);
+ }
+ 
++void IPASoftSimple::setLensPositionResult(uint32_t frame, int32_t position,
++					  int32_t result)
++{
++	if (result) {
++		LOG(IPASoft, Error)
++			<< "Raw lens command for frame " << frame
++			<< " at position " << position
++			<< " failed: " << result;
++	} else {
++		LOG(IPASoft, Debug)
++			<< "Raw lens command for frame " << frame
++			<< " applied at position " << position;
++	}
++}
++
+ std::string IPASoftSimple::logPrefix() const
+ {
+ 	return "IPASoft";
+diff --git a/src/libcamera/meson.build b/src/libcamera/meson.build
+index 6aedacbd..405014b6 100644
+--- a/src/libcamera/meson.build
++++ b/src/libcamera/meson.build
+@@ -50,6 +50,7 @@ libcamera_internal_sources = files([
+     'process.cpp',
+     'pub_key.cpp',
+     'shared_mem_object.cpp',
++    'simple_pipeline_lens.cpp',
+     'source_paths.cpp',
+     'sysfs.cpp',
+     'v4l2_device.cpp',
+diff --git a/src/libcamera/pipeline/simple/simple.cpp b/src/libcamera/pipeline/simple/simple.cpp
+index c6fe12d6..f22144d0 100644
+--- a/src/libcamera/pipeline/simple/simple.cpp
++++ b/src/libcamera/pipeline/simple/simple.cpp
+@@ -33,6 +33,7 @@
+ #include <libcamera/stream.h>
+ 
+ #include "libcamera/internal/camera.h"
++#include "libcamera/internal/camera_lens.h"
+ #include "libcamera/internal/camera_manager.h"
+ #include "libcamera/internal/camera_sensor.h"
+ #include "libcamera/internal/camera_sensor_properties.h"
+@@ -44,6 +45,7 @@
+ #include "libcamera/internal/media_device.h"
+ #include "libcamera/internal/pipeline_handler.h"
+ #include "libcamera/internal/request.h"
++#include "libcamera/internal/simple_pipeline_lens.h"
+ #include "libcamera/internal/software_isp/software_isp.h"
+ #include "libcamera/internal/v4l2_subdevice.h"
+ #include "libcamera/internal/v4l2_videodevice.h"
+@@ -343,6 +345,7 @@ public:
+ 	std::unique_ptr<CameraSensor> sensor_;
+ 	V4L2VideoDevice *video_;
+ 	V4L2Subdevice *frameStartEmitter_;
++	SimplePipelineLens lens_;
+ 
+ 	std::vector<Configuration> configs_;
+ 	std::map<PixelFormat, std::vector<const Configuration *>> formats_;
+@@ -372,6 +375,7 @@ private:
+ 	void ispStatsReady(uint32_t frame, uint32_t bufferId);
+ 	void metadataReady(uint32_t frame, const ControlList &metadata);
+ 	void setSensorControls(const ControlList &sensorControls);
++	void setLensPosition(uint32_t frame, int32_t position);
+ };
+ 
+ class SimpleCameraConfiguration : public CameraConfiguration
+@@ -626,6 +630,7 @@ int SimpleCameraData::init()
+ 			swIsp_->ispStatsReady.connect(this, &SimpleCameraData::ispStatsReady);
+ 			swIsp_->metadataReady.connect(this, &SimpleCameraData::metadataReady);
+ 			swIsp_->setSensorControls.connect(this, &SimpleCameraData::setSensorControls);
++			swIsp_->setLensPosition.connect(this, &SimpleCameraData::setLensPosition);
+ 		}
+ 	}
+ 
+@@ -1058,6 +1063,20 @@ void SimpleCameraData::setSensorControls(const ControlList &sensorControls)
+ 	}
+ }
+ 
++void SimpleCameraData::setLensPosition(uint32_t frame, int32_t position)
++{
++	int ret = lens_.setPosition(frame, position);
++	if (ret) {
++		LOG(SimplePipeline, Error)
++			<< "Raw lens command for frame " << frame
++			<< " at position " << position
++			<< " failed: " << ret;
++	}
++
++	/* The acknowledgement lets the future AF state machine fail safely. */
++	swIsp_->setLensPositionResult(frame, position, ret);
++}
++
+ /* Retrieve all source pads connected to a sink pad through active routes. */
+ std::vector<const MediaPad *> SimpleCameraData::routedSourcePads(MediaPad *sink)
+ {
+@@ -1579,6 +1598,8 @@ int SimplePipelineHandler::configure(Camera *camera, CameraConfiguration *c)
+ 			data->rawStream_ = &data->streams_[i];
+ 	}
+ 
++	data->lens_.reset();
++
+ 	if (outputCfgs.empty())
+ 		return 0;
+ 
+@@ -1588,13 +1609,38 @@ int SimplePipelineHandler::configure(Camera *camera, CameraConfiguration *c)
+ 	inputCfg.stride = captureFormat.planes[0].bpl;
+ 	inputCfg.bufferCount = kNumInternalBuffers;
+ 
+-	if (data->converter_) {
++	if (data->converter_)
+ 		return data->converter_->configure(inputCfg, outputCfgs);
+-	} else {
+-		ipa::soft::IPAConfigInfo configInfo;
+-		configInfo.sensorControls = data->sensor_->controls();
+-		return data->swIsp_->configure(inputCfg, outputCfgs, configInfo);
++
++	ipa::soft::IPAConfigInfo configInfo;
++	configInfo.sensorControls = data->sensor_->controls();
++
++	CameraLens *focusLens = data->sensor_->focusLens();
++	if (focusLens)
++		configInfo.lensControls = focusLens->controls();
++
++	ipa::soft::IPARawLensConfig lensConfig;
++	ret = data->swIsp_->configure(inputCfg, outputCfgs, configInfo,
++				     &lensConfig);
++	if (ret)
++		return ret;
++
++	SimplePipelineLens::SetPosition setPosition;
++	if (focusLens) {
++		setPosition = [focusLens](int32_t position) {
++			return focusLens->setFocusPosition(position);
++		};
+ 	}
++
++	ret = data->lens_.configure(configInfo.lensControls,
++				    lensConfig.enabled,
++				    lensConfig.minimum,
++				    lensConfig.maximum,
++				    std::move(setPosition));
++	if (ret)
++		LOG(SimplePipeline, Error) << "Invalid raw lens configuration: " << ret;
++
++	return ret;
+ }
+ 
+ int SimplePipelineHandler::exportFrameBuffers(Camera *camera, Stream *stream,
+@@ -1653,6 +1699,7 @@ int SimplePipelineHandler::start(Camera *camera, [[maybe_unused]] const ControlL
+ 	video->bufferReady.connect(data, &SimpleCameraData::imageBufferReady);
+ 
+ 	data->delayedCtrls_->reset();
++	data->lens_.resetSession();
+ 	if (frameStartEmitter) {
+ 		ret = frameStartEmitter->setFrameStartEnabled(true);
+ 		if (ret) {
+@@ -1719,6 +1766,7 @@ void SimplePipelineHandler::stopDevice(Camera *camera)
+ 	data->clearIncompleteRequests();
+ 	data->conversionBuffers_.clear();
+ 
++	data->lens_.resetSession();
+ 	releasePipeline(data);
+ }
+ 
+diff --git a/src/libcamera/simple_pipeline_lens.cpp b/src/libcamera/simple_pipeline_lens.cpp
+new file mode 100644
+index 00000000..418289c1
+--- /dev/null
++++ b/src/libcamera/simple_pipeline_lens.cpp
+@@ -0,0 +1,116 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * Copyright (C) 2026, Kostik
++ *
++ * Validated raw lens-command plumbing for the Simple pipeline
++ */
++
++#include "libcamera/internal/simple_pipeline_lens.h"
++
++#include <errno.h>
++#include <utility>
++
++#include <linux/v4l2-controls.h>
++
++namespace libcamera {
++
++int SimplePipelineLens::configure(const ControlInfoMap &kernelControls,
++				  bool enabled, int32_t minimum,
++				  int32_t maximum, SetPosition setPosition)
++{
++	reset();
++
++	if (!enabled)
++		return 0;
++
++	if (kernelControls.empty())
++		return -ENODEV;
++
++	auto it = kernelControls.find(V4L2_CID_FOCUS_ABSOLUTE);
++	if (it == kernelControls.end())
++		return -EINVAL;
++
++	const ControlInfo &info = it->second;
++	if (info.min().type() != ControlTypeInteger32 ||
++	    info.max().type() != ControlTypeInteger32 ||
++	    info.min().isArray() || info.max().isArray())
++		return -EINVAL;
++
++	int32_t kernelMinimum = info.min().get<int32_t>();
++	int32_t kernelMaximum = info.max().get<int32_t>();
++	if (kernelMinimum == kernelMaximum)
++		return -EACCES;
++	if (kernelMinimum > kernelMaximum)
++		return -EINVAL;
++
++	if (minimum >= maximum)
++		return -EINVAL;
++	if (minimum < kernelMinimum || maximum > kernelMaximum)
++		return -ERANGE;
++	if (!setPosition)
++		return -EINVAL;
++
++	enabled_ = true;
++	minimum_ = minimum;
++	maximum_ = maximum;
++	setPosition_ = std::move(setPosition);
++	return 0;
++}
++
++int SimplePipelineLens::setPosition(uint32_t frame, int32_t position)
++{
++	if (!enabled_)
++		return -ENODEV;
++
++	if (lastFrame_) {
++		if (frame < *lastFrame_)
++			return -ESTALE;
++
++		if (frame == *lastFrame_) {
++			if (position != *lastRequestedPosition_)
++				return -EALREADY;
++
++			return lastResult_;
++		}
++	}
++
++	if (position < minimum_ || position > maximum_)
++		return -ERANGE;
++
++	lastFrame_ = frame;
++	lastRequestedPosition_ = position;
++
++	if (position_ && position == *position_) {
++		lastResult_ = 0;
++		return 0;
++	}
++
++	int ret = setPosition_(position);
++	if (ret > 0)
++		ret = -EIO;
++
++	lastResult_ = ret;
++	if (!ret)
++		position_ = position;
++
++	return ret;
++}
++
++void SimplePipelineLens::reset()
++{
++	enabled_ = false;
++	minimum_ = 0;
++	maximum_ = 0;
++	setPosition_ = {};
++	resetSession();
++}
++
++void SimplePipelineLens::resetSession()
++{
++	lastFrame_.reset();
++	lastRequestedPosition_.reset();
++	position_.reset();
++	lastResult_ = 0;
++}
++
++} /* namespace libcamera */
+diff --git a/src/libcamera/software_isp/software_isp.cpp b/src/libcamera/software_isp/software_isp.cpp
+index d227bd8e..b88c145b 100644
+--- a/src/libcamera/software_isp/software_isp.cpp
++++ b/src/libcamera/software_isp/software_isp.cpp
+@@ -168,6 +168,7 @@ SoftwareIsp::SoftwareIsp(PipelineHandler *pipe, const CameraSensor *sensor,
+ 					    metadataReady.emit(frame, metadata);
+ 				    });
+ 	ipa_->setSensorControls.connect(this, &SoftwareIsp::setSensorCtrls);
++	ipa_->setLensPosition.connect(this, &SoftwareIsp::setLensPositionFromIpa);
+ 
+ 	debayer_->moveToThread(&ispWorkerThread_);
+ }
+@@ -259,15 +260,17 @@ SoftwareIsp::strideAndFrameSize(const PixelFormat &outputFormat, const Size &siz
+  * \param[in] outputCfgs The output configurations
+  * \param[in] configInfo The IPA configuration data, received from the pipeline
+  * handler
++ * \param[out] lensConfig Validated raw-lens interval requested by the IPA
+  * \return 0 on success, a negative errno on failure
+  */
+ int SoftwareIsp::configure(const StreamConfiguration &inputCfg,
+ 			   const std::vector<std::reference_wrapper<const StreamConfiguration>> &outputCfgs,
+-			   const ipa::soft::IPAConfigInfo &configInfo)
++			   const ipa::soft::IPAConfigInfo &configInfo,
++			   ipa::soft::IPARawLensConfig *lensConfig)
+ {
+ 	ASSERT(ipa_ && debayer_);
+ 
+-	int ret = ipa_->configure(configInfo);
++	int ret = ipa_->configure(configInfo, lensConfig);
+ 	if (ret < 0)
+ 		return ret;
+ 
+@@ -422,6 +425,17 @@ void SoftwareIsp::setSensorCtrls(const ControlList &sensorControls)
+ 	setSensorControls.emit(sensorControls);
+ }
+ 
++void SoftwareIsp::setLensPositionFromIpa(uint32_t frame, int32_t position)
++{
++	setLensPosition.emit(frame, position);
++}
++
++void SoftwareIsp::setLensPositionResult(uint32_t frame, int32_t position,
++					int32_t result)
++{
++	ipa_->setLensPositionResult(frame, position, result);
++}
++
+ void SoftwareIsp::statsReady(uint32_t frame, uint32_t bufferId)
+ {
+ 	ispStatsReady.emit(frame, bufferId);
+diff --git a/test/meson.build b/test/meson.build
+index e4450625..e715f474 100644
+--- a/test/meson.build
++++ b/test/meson.build
+@@ -67,6 +67,7 @@ internal_tests = [
+     {'name': 'object-invoke', 'sources': ['object-invoke.cpp']},
+     {'name': 'pixel-format', 'sources': ['pixel-format.cpp']},
+     {'name': 'shared-fd', 'sources': ['shared-fd.cpp']},
++    {'name': 'simple-pipeline-lens', 'sources': ['simple-pipeline-lens.cpp']},
+     {'name': 'signal-threads', 'sources': ['signal-threads.cpp']},
+     {'name': 'threads', 'sources': 'threads.cpp', 'dependencies': [libthreads]},
+     {'name': 'timer', 'sources': ['timer.cpp']},
+diff --git a/test/simple-pipeline-lens.cpp b/test/simple-pipeline-lens.cpp
+new file mode 100644
+index 00000000..53182711
+--- /dev/null
++++ b/test/simple-pipeline-lens.cpp
+@@ -0,0 +1,178 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright (C) 2026, Kostik
++ *
++ * Simple pipeline raw lens-command tests
++ */
++
++#include <errno.h>
++#include <iostream>
++#include <utility>
++
++#include <linux/v4l2-controls.h>
++
++#include <libcamera/controls.h>
++
++#include "libcamera/internal/simple_pipeline_lens.h"
++
++#include "test.h"
++
++using namespace libcamera;
++using namespace std;
++
++namespace {
++
++template<typename T>
++int configureWithControl(SimplePipelineLens &lens, unsigned int id,
++			 const ControlInfo &info, bool enabled,
++			 int32_t minimum, int32_t maximum,
++			 SimplePipelineLens::SetPosition setPosition)
++{
++	Control<T> control(id, "TestControl", "test", ControlId::Direction::In);
++	ControlIdMap idMap{ { id, &control } };
++	ControlInfoMap controls({ { &control, info } }, idMap);
++
++	return lens.configure(controls, enabled, minimum, maximum,
++			      std::move(setPosition));
++}
++
++class SimplePipelineLensTest : public Test
++{
++protected:
++	int run() override
++	{
++		SimplePipelineLens lens;
++		ControlInfoMap noControls;
++		auto success = [](int32_t) { return 0; };
++
++		if (lens.configure(noControls, false, 0, 0, {}) ||
++		    lens.enabled() || lens.setPosition(0, 0) != -ENODEV) {
++			cerr << "Disabled lens configuration is not inert" << endl;
++			return TestFail;
++		}
++
++		if (lens.configure(noControls, true, 242, 726, success) != -ENODEV) {
++			cerr << "Missing lens was not rejected" << endl;
++			return TestFail;
++		}
++
++		if (configureWithControl<int32_t>(lens, V4L2_CID_ZOOM_ABSOLUTE,
++						  ControlInfo(0, 1023, 0), true,
++						  242, 726, success) != -EINVAL) {
++			cerr << "Missing focus control was not rejected" << endl;
++			return TestFail;
++		}
++
++		if (configureWithControl<float>(lens, V4L2_CID_FOCUS_ABSOLUTE,
++					      ControlInfo(0.0f, 1023.0f, 0.0f), true,
++					      242, 726, success) != -EINVAL) {
++			cerr << "Malformed focus control was not rejected" << endl;
++			return TestFail;
++		}
++
++		if (configureWithControl<int32_t>(lens, V4L2_CID_FOCUS_ABSOLUTE,
++						  ControlInfo(517, 517, 517), true,
++						  242, 517, success) != -EACCES) {
++			cerr << "Read-only focus range was not rejected" << endl;
++			return TestFail;
++		}
++
++		if (configureWithControl<int32_t>(lens, V4L2_CID_FOCUS_ABSOLUTE,
++						  ControlInfo(1023, 0, 0), true,
++						  242, 726, success) != -EINVAL) {
++			cerr << "Malformed kernel range was not rejected" << endl;
++			return TestFail;
++		}
++
++		if (configureWithControl<int32_t>(lens, V4L2_CID_FOCUS_ABSOLUTE,
++						  ControlInfo(0, 1023, 0), true,
++						  726, 242, success) != -EINVAL) {
++			cerr << "Malformed configured range was not rejected" << endl;
++			return TestFail;
++		}
++
++		if (configureWithControl<int32_t>(lens, V4L2_CID_FOCUS_ABSOLUTE,
++						  ControlInfo(0, 517, 0), true,
++						  242, 726, success) != -ERANGE) {
++			cerr << "Range outside kernel limits was not rejected" << endl;
++			return TestFail;
++		}
++
++		if (configureWithControl<int32_t>(lens, V4L2_CID_FOCUS_ABSOLUTE,
++						  ControlInfo(0, 1023, 0), true,
++						  242, 726, {}) != -EINVAL) {
++			cerr << "Missing writer was not rejected" << endl;
++			return TestFail;
++		}
++
++		unsigned int writes = 0;
++		int32_t writtenPosition = -1;
++		bool failWrite = false;
++		auto writer = [&](int32_t position) {
++			++writes;
++			writtenPosition = position;
++			return failWrite ? -EIO : 0;
++		};
++
++		if (configureWithControl<int32_t>(lens, V4L2_CID_FOCUS_ABSOLUTE,
++						  ControlInfo(0, 1023, 0), true,
++						  242, 726, writer) ||
++		    !lens.enabled()) {
++			cerr << "Valid configuration failed" << endl;
++			return TestFail;
++		}
++
++		if (lens.setPosition(1, 241) != -ERANGE || writes) {
++			cerr << "Out-of-range position reached the writer" << endl;
++			return TestFail;
++		}
++
++		if (lens.setPosition(10, 242) || writes != 1 ||
++		    writtenPosition != 242 || lens.position() != 242) {
++			cerr << "Valid position was not applied" << endl;
++			return TestFail;
++		}
++
++		if (lens.setPosition(10, 242) || writes != 1 ||
++		    lens.setPosition(10, 250) != -EALREADY ||
++		    lens.setPosition(11, 242) || writes != 1 ||
++		    lens.setPosition(9, 250) != -ESTALE) {
++			cerr << "Duplicate or ordered-command handling failed" << endl;
++			return TestFail;
++		}
++
++		failWrite = true;
++		if (lens.setPosition(12, 300) != -EIO || writes != 2 ||
++		    lens.position() != 242 ||
++		    lens.setPosition(12, 300) != -EIO || writes != 2) {
++			cerr << "Write failure handling failed" << endl;
++			return TestFail;
++		}
++
++		failWrite = false;
++		if (lens.setPosition(13, 300) || writes != 3 ||
++		    lens.position() != 300) {
++			cerr << "Write recovery failed" << endl;
++			return TestFail;
++		}
++
++		lens.resetSession();
++		if (lens.position() || lens.setPosition(1, 300) || writes != 4) {
++			cerr << "Session cleanup did not clear duplicate state" << endl;
++			return TestFail;
++		}
++
++		lens.reset();
++		if (lens.enabled() || lens.position() ||
++		    lens.setPosition(2, 300) != -ENODEV) {
++			cerr << "Full reset did not disable the lens" << endl;
++			return TestFail;
++		}
++
++		return TestPass;
++	}
++};
++
++} /* namespace */
++
++TEST_REGISTER(SimplePipelineLensTest)
+-- 
+2.43.0
+

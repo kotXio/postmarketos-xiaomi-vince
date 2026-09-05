@@ -1,0 +1,64 @@
+# Contributor: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+maintainer="Kostiantyn Andriiuk <konstantin@andriyuk.com>"
+pkgname=plasma-camera
+pkgver=2.1.1
+pkgrel=6
+pkgdesc="Camera application for Plasma Mobile with one-shot rear autofocus"
+arch="aarch64"
+url="https://invent.kde.org/plasma-mobile/plasma-camera"
+license="GPL-3.0-or-later AND BSD-3-Clause"
+depends="
+	gst-plugins-bad
+	gst-plugins-good
+	kirigami
+	kirigami-addons
+	libcamera=99991.7.1-r3
+	qt6-qtmultimedia
+	qt6-qtsensors
+	"
+makedepends="
+	extra-cmake-modules
+	kcoreaddons-dev
+	ki18n-dev
+	kirigami-dev
+	libcamera-dev=99991.7.1-r3
+	libkexiv2-dev
+	qt6-qtbase-dev
+	qt6-qtdeclarative-dev
+	qt6-qtmultimedia-dev
+	qt6-qtsensors-dev
+	qt6-qtsvg-dev
+	samurai
+	"
+checkdepends="appstream"
+subpackages="$pkgname-lang"
+source="
+	https://download.kde.org/stable/plasma-camera/plasma-camera-$pkgver.tar.xz
+	../../patches/plasma-camera/0001-one-shot-autofocus.patch
+	"
+builddir="$srcdir/plasma-camera-$pkgver"
+export SOURCE_DATE_EPOCH=1788512352
+
+build() {
+	cmake -B build -G Ninja \
+		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DCMAKE_INSTALL_LIBDIR=lib \
+		-DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
+		-DCMAKE_CXX_FLAGS="$CXXFLAGS -Wno-error=unused-parameter -Wno-error=deprecated-declarations" \
+		-DBUILD_TESTING=ON
+	cmake --build build --parallel 4
+}
+
+check() {
+	ctest --test-dir build --output-on-failure
+}
+
+package() {
+	DESTDIR="$pkgdir" cmake --install build
+}
+
+sha512sums="
+0a7a6e4bcce5fcb483291e15bca3a4537a4f00a8b7ab4fbd3f38e775ec8757a4b99e4fd4124435e734f865a167a61e836945520005c4058bc41757216e8a325f  plasma-camera-2.1.1.tar.xz
+21fb52332474cfbcdda9d5cf851095c04da19abfbbd5030a5094d24913a39a6f744fb93db314b55e719f5d8ff1c6cdec75176409875677e9572d6129815a4c14  ../../patches/plasma-camera/0001-one-shot-autofocus.patch
+"

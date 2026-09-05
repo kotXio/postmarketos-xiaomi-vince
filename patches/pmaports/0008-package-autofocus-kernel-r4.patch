@@ -1,0 +1,13 @@
+diff --git a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+index a905b2307..ba7dc785a 100644
+--- a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
++++ b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+@@ -3,7 +3,7 @@ maintainer="Barnabas Czeman <barnabas.czeman@postmarketos.org>"
+ _flavor="postmarketos-qcom-msm8953"
+ pkgname=linux-$_flavor
+ pkgver=7.0.9
+-pkgrel=3
++pkgrel=4
+ pkgdesc="Close to mainline linux kernel for Qualcomm Snapdragon MSM8953"
+ arch="aarch64"
+ _carch="arm64"

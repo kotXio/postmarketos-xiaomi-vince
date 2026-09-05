@@ -1,0 +1,974 @@
+From 63856d56218f289a78d6b92791c410b14f146b3f Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Fri, 4 Sep 2026 10:36:22 +0300
+Subject: [PATCH] Add CPU focus statistics
+
+---
+ .../internal/software_isp/meson.build         |   1 +
+ .../internal/software_isp/swisp_stats.h       |  16 +
+ .../internal/software_isp/swstats_cpu.h       |  28 +-
+ .../internal/software_isp/swstats_cpu_focus.h |  58 +++
+ src/libcamera/software_isp/meson.build        |   1 +
+ src/libcamera/software_isp/swstats_cpu.cpp    |  56 ++-
+ .../software_isp/swstats_cpu_focus.cpp        | 192 ++++++++++
+ test/meson.build                              |   1 +
+ test/swstats-cpu-focus.cpp                    | 346 ++++++++++++++++++
+ 9 files changed, 685 insertions(+), 14 deletions(-)
+ create mode 100644 include/libcamera/internal/software_isp/swstats_cpu_focus.h
+ create mode 100644 src/libcamera/software_isp/swstats_cpu_focus.cpp
+ create mode 100644 test/swstats-cpu-focus.cpp
+
+diff --git a/include/libcamera/internal/software_isp/meson.build b/include/libcamera/internal/software_isp/meson.build
+index df7c3b97..cde349f9 100644
+--- a/include/libcamera/internal/software_isp/meson.build
++++ b/include/libcamera/internal/software_isp/meson.build
+@@ -6,4 +6,5 @@ libcamera_internal_headers += files([
+     'software_isp.h',
+     'swisp_stats.h',
+     'swstats_cpu.h',
++    'swstats_cpu_focus.h',
+ ])
+diff --git a/include/libcamera/internal/software_isp/swisp_stats.h b/include/libcamera/internal/software_isp/swisp_stats.h
+index d9d0d9be..b24a0252 100644
+--- a/include/libcamera/internal/software_isp/swisp_stats.h
++++ b/include/libcamera/internal/software_isp/swisp_stats.h
+@@ -43,6 +43,22 @@ struct SwIspStats {
+ 	 * \brief A histogram of luminance values of all the sampled pixels
+ 	 */
+ 	Histogram yHistogram;
++	/**
++	 * \brief Sum of squared green-channel gradients in the focus window
++	 */
++	uint64_t focusGradientSum;
++	/**
++	 * \brief Number of gradients accumulated in focusGradientSum
++	 */
++	uint64_t focusGradientSamples;
++	/**
++	 * \brief Sum of the normalized green samples in the focus window
++	 */
++	uint64_t focusGreenSum;
++	/**
++	 * \brief Number of samples accumulated in focusGreenSum
++	 */
++	uint64_t focusGreenSamples;
+ };
+ 
+ } /* namespace libcamera */
+diff --git a/include/libcamera/internal/software_isp/swstats_cpu.h b/include/libcamera/internal/software_isp/swstats_cpu.h
+index 802370bd..72ecc793 100644
+--- a/include/libcamera/internal/software_isp/swstats_cpu.h
++++ b/include/libcamera/internal/software_isp/swstats_cpu.h
+@@ -22,6 +22,7 @@
+ #include "libcamera/internal/framebuffer.h"
+ #include "libcamera/internal/shared_mem_object.h"
+ #include "libcamera/internal/software_isp/swisp_stats.h"
++#include "libcamera/internal/software_isp/swstats_cpu_focus.h"
+ 
+ #include "benchmark.h"
+ 
+@@ -67,7 +68,8 @@ public:
+ 		    y >= (window_.y + window_.height))
+ 			return;
+ 
+-		(this->*stats0_)(src, stats_[statsBufferIndex]);
++		(this->*stats0_)(src, stats_[statsBufferIndex], statsBufferIndex,
++				 focus_.processLine(y));
+ 	}
+ 
+ 	void processLine2(uint32_t frame, unsigned int y, const uint8_t *src[], unsigned int statsBufferIndex = 0)
+@@ -79,25 +81,34 @@ public:
+ 		    y >= (window_.y + window_.height))
+ 			return;
+ 
+-		(this->*stats2_)(src, stats_[statsBufferIndex]);
++		(this->*stats2_)(src, stats_[statsBufferIndex], statsBufferIndex,
++				 focus_.processLine(y));
+ 	}
+ 
+ 	Signal<uint32_t, uint32_t> statsReady;
+ 
+ private:
+-	using statsProcessFn = void (SwStatsCpu::*)(const uint8_t *src[], SwIspStats &stats);
++	using statsProcessFn = void (SwStatsCpu::*)(const uint8_t *src[],
++					     SwIspStats &stats,
++					     unsigned int statsBufferIndex,
++					     bool processFocus);
+ 	using processFrameFn = void (SwStatsCpu::*)(MappedFrameBuffer &in);
+ 
+ 	int setupStandardBayerOrder(BayerFormat::Order order);
+ 	/* Bayer 8 bpp unpacked */
+-	void statsBGGR8Line0(const uint8_t *src[], SwIspStats &stats);
++	void statsBGGR8Line0(const uint8_t *src[], SwIspStats &stats,
++			     unsigned int statsBufferIndex, bool processFocus);
+ 	/* Bayer 10 bpp unpacked */
+-	void statsBGGR10Line0(const uint8_t *src[], SwIspStats &stats);
++	void statsBGGR10Line0(const uint8_t *src[], SwIspStats &stats,
++			      unsigned int statsBufferIndex, bool processFocus);
+ 	/* Bayer 12 bpp unpacked */
+-	void statsBGGR12Line0(const uint8_t *src[], SwIspStats &stats);
++	void statsBGGR12Line0(const uint8_t *src[], SwIspStats &stats,
++			      unsigned int statsBufferIndex, bool processFocus);
+ 	/* Bayer 10 bpp packed */
+-	void statsBGGR10PLine0(const uint8_t *src[], SwIspStats &stats);
+-	void statsGBRG10PLine0(const uint8_t *src[], SwIspStats &stats);
++	void statsBGGR10PLine0(const uint8_t *src[], SwIspStats &stats,
++			       unsigned int statsBufferIndex, bool processFocus);
++	void statsGBRG10PLine0(const uint8_t *src[], SwIspStats &stats,
++			       unsigned int statsBufferIndex, bool processFocus);
+ 
+ 	void processBayerFrame2(MappedFrameBuffer &in);
+ 
+@@ -118,6 +129,7 @@ private:
+ 	unsigned int stride_;
+ 
+ 	std::vector<SwIspStats> stats_;
++	SwStatsCpuFocus focus_;
+ 	SharedMemObject<SwIspStats> sharedStats_;
+ 	Benchmark bench_;
+ };
+diff --git a/include/libcamera/internal/software_isp/swstats_cpu_focus.h b/include/libcamera/internal/software_isp/swstats_cpu_focus.h
+new file mode 100644
+index 00000000..2ef24db6
+--- /dev/null
++++ b/include/libcamera/internal/software_isp/swstats_cpu_focus.h
+@@ -0,0 +1,58 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * Copyright (C) 2026, Kostik
++ *
++ * CPU based software focus statistics helper
++ */
++
++#pragma once
++
++#include <stdint.h>
++#include <vector>
++
++#include <libcamera/geometry.h>
++
++#include "libcamera/internal/software_isp/swisp_stats.h"
++
++namespace libcamera {
++
++class SwStatsCpuFocus
++{
++public:
++	static constexpr unsigned int kSampleStep = 4;
++
++	void configure(const Rectangle &statsWindow, unsigned int bufferCount);
++	void startFrame();
++
++	bool processLine(unsigned int y) const;
++	bool processColumn(unsigned int x) const;
++
++	void startLine(unsigned int bufferIndex);
++	void addSample(unsigned int bufferIndex, SwIspStats &stats,
++		       uint16_t green, unsigned int rightShift);
++	void finishLine(unsigned int bufferIndex);
++
++	const Rectangle &window() const { return window_; }
++
++	static void reset(SwIspStats &stats);
++	void merge(SwIspStats &destination,
++		   const std::vector<SwIspStats> &sources) const;
++
++private:
++	struct BufferState {
++		std::vector<uint8_t> firstLine;
++		std::vector<uint8_t> previousLine;
++		unsigned int sampleIndex = 0;
++		uint8_t left = 0;
++		bool leftValid = false;
++		bool previousLineValid = false;
++		bool hasLines = false;
++		bool lineActive = false;
++	};
++
++	Rectangle window_;
++	unsigned int sampleColumns_ = 0;
++	std::vector<BufferState> buffers_;
++};
++
++} /* namespace libcamera */
+diff --git a/src/libcamera/software_isp/meson.build b/src/libcamera/software_isp/meson.build
+index 15f9e403..0849e73b 100644
+--- a/src/libcamera/software_isp/meson.build
++++ b/src/libcamera/software_isp/meson.build
+@@ -25,6 +25,7 @@ libcamera_internal_sources += files([
+     'debayer_cpu.cpp',
+     'software_isp.cpp',
+     'swstats_cpu.cpp',
++    'swstats_cpu_focus.cpp',
+ ])
+ 
+ if mesa_works
+diff --git a/src/libcamera/software_isp/swstats_cpu.cpp b/src/libcamera/software_isp/swstats_cpu.cpp
+index 5366e019..47bafc37 100644
+--- a/src/libcamera/software_isp/swstats_cpu.cpp
++++ b/src/libcamera/software_isp/swstats_cpu.cpp
+@@ -194,7 +194,8 @@ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
+ 	stats.sum_.g() += sumG;     \
+ 	stats.sum_.b() += sumB;
+ 
+-void SwStatsCpu::statsBGGR8Line0(const uint8_t *src[], SwIspStats &stats)
++void SwStatsCpu::statsBGGR8Line0(const uint8_t *src[], SwIspStats &stats,
++				 unsigned int statsBufferIndex, bool processFocus)
+ {
+ 	const uint8_t *src0 = src[1] + window_.x;
+ 	const uint8_t *src1 = src[2] + window_.x;
+@@ -203,6 +204,8 @@ void SwStatsCpu::statsBGGR8Line0(const uint8_t *src[], SwIspStats &stats)
+ 
+ 	if (swapLines_)
+ 		std::swap(src0, src1);
++	if (processFocus)
++		focus_.startLine(statsBufferIndex);
+ 
+ 	/* x += 4 sample every other 2x2 block */
+ 	for (unsigned int x = 0; x < window_.width; x += 4) {
+@@ -212,14 +215,19 @@ void SwStatsCpu::statsBGGR8Line0(const uint8_t *src[], SwIspStats &stats)
+ 		r = src1[x + 1];
+ 
+ 		g = (g + g2) / 2;
++		if (processFocus && focus_.processColumn(window_.x + x))
++			focus_.addSample(statsBufferIndex, stats, g, 0);
+ 
+ 		SWSTATS_ACCUMULATE_LINE_STATS(1)
+ 	}
++	if (processFocus)
++		focus_.finishLine(statsBufferIndex);
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+ }
+ 
+-void SwStatsCpu::statsBGGR10Line0(const uint8_t *src[], SwIspStats &stats)
++void SwStatsCpu::statsBGGR10Line0(const uint8_t *src[], SwIspStats &stats,
++				  unsigned int statsBufferIndex, bool processFocus)
+ {
+ 	const uint16_t *src0 = (const uint16_t *)src[1] + window_.x;
+ 	const uint16_t *src1 = (const uint16_t *)src[2] + window_.x;
+@@ -228,6 +236,8 @@ void SwStatsCpu::statsBGGR10Line0(const uint8_t *src[], SwIspStats &stats)
+ 
+ 	if (swapLines_)
+ 		std::swap(src0, src1);
++	if (processFocus)
++		focus_.startLine(statsBufferIndex);
+ 
+ 	/* x += 4 sample every other 2x2 block */
+ 	for (unsigned int x = 0; x < window_.width; x += 4) {
+@@ -237,15 +247,20 @@ void SwStatsCpu::statsBGGR10Line0(const uint8_t *src[], SwIspStats &stats)
+ 		r = src1[x + 1];
+ 
+ 		g = (g + g2) / 2;
++		if (processFocus && focus_.processColumn(window_.x + x))
++			focus_.addSample(statsBufferIndex, stats, g, 2);
+ 
+ 		/* divide Y by 4 for 10 -> 8 bpp value */
+ 		SWSTATS_ACCUMULATE_LINE_STATS(4)
+ 	}
++	if (processFocus)
++		focus_.finishLine(statsBufferIndex);
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+ }
+ 
+-void SwStatsCpu::statsBGGR12Line0(const uint8_t *src[], SwIspStats &stats)
++void SwStatsCpu::statsBGGR12Line0(const uint8_t *src[], SwIspStats &stats,
++				  unsigned int statsBufferIndex, bool processFocus)
+ {
+ 	const uint16_t *src0 = (const uint16_t *)src[1] + window_.x;
+ 	const uint16_t *src1 = (const uint16_t *)src[2] + window_.x;
+@@ -254,6 +269,8 @@ void SwStatsCpu::statsBGGR12Line0(const uint8_t *src[], SwIspStats &stats)
+ 
+ 	if (swapLines_)
+ 		std::swap(src0, src1);
++	if (processFocus)
++		focus_.startLine(statsBufferIndex);
+ 
+ 	/* x += 4 sample every other 2x2 block */
+ 	for (unsigned int x = 0; x < window_.width; x += 4) {
+@@ -263,15 +280,20 @@ void SwStatsCpu::statsBGGR12Line0(const uint8_t *src[], SwIspStats &stats)
+ 		r = src1[x + 1];
+ 
+ 		g = (g + g2) / 2;
++		if (processFocus && focus_.processColumn(window_.x + x))
++			focus_.addSample(statsBufferIndex, stats, g, 4);
+ 
+ 		/* divide Y by 16 for 12 -> 8 bpp value */
+ 		SWSTATS_ACCUMULATE_LINE_STATS(16)
+ 	}
++	if (processFocus)
++		focus_.finishLine(statsBufferIndex);
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+ }
+ 
+-void SwStatsCpu::statsBGGR10PLine0(const uint8_t *src[], SwIspStats &stats)
++void SwStatsCpu::statsBGGR10PLine0(const uint8_t *src[], SwIspStats &stats,
++				   unsigned int statsBufferIndex, bool processFocus)
+ {
+ 	const uint8_t *src0 = src[1] + window_.x * 5 / 4;
+ 	const uint8_t *src1 = src[2] + window_.x * 5 / 4;
+@@ -279,6 +301,8 @@ void SwStatsCpu::statsBGGR10PLine0(const uint8_t *src[], SwIspStats &stats)
+ 
+ 	if (swapLines_)
+ 		std::swap(src0, src1);
++	if (processFocus)
++		focus_.startLine(statsBufferIndex);
+ 
+ 	SWSTATS_START_LINE_STATS(uint8_t)
+ 
+@@ -290,14 +314,20 @@ void SwStatsCpu::statsBGGR10PLine0(const uint8_t *src[], SwIspStats &stats)
+ 		g2 = src1[x];
+ 		r = src1[x + 1];
+ 		g = (g + g2) / 2;
++		if (processFocus &&
++		    focus_.processColumn(window_.x + x * 4 / 5))
++			focus_.addSample(statsBufferIndex, stats, g, 0);
+ 		/* Data is already 8 bits, divide by 1 */
+ 		SWSTATS_ACCUMULATE_LINE_STATS(1)
+ 	}
++	if (processFocus)
++		focus_.finishLine(statsBufferIndex);
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+ }
+ 
+-void SwStatsCpu::statsGBRG10PLine0(const uint8_t *src[], SwIspStats &stats)
++void SwStatsCpu::statsGBRG10PLine0(const uint8_t *src[], SwIspStats &stats,
++				   unsigned int statsBufferIndex, bool processFocus)
+ {
+ 	const uint8_t *src0 = src[1] + window_.x * 5 / 4;
+ 	const uint8_t *src1 = src[2] + window_.x * 5 / 4;
+@@ -305,6 +335,8 @@ void SwStatsCpu::statsGBRG10PLine0(const uint8_t *src[], SwIspStats &stats)
+ 
+ 	if (swapLines_)
+ 		std::swap(src0, src1);
++	if (processFocus)
++		focus_.startLine(statsBufferIndex);
+ 
+ 	SWSTATS_START_LINE_STATS(uint8_t)
+ 
+@@ -316,9 +348,14 @@ void SwStatsCpu::statsGBRG10PLine0(const uint8_t *src[], SwIspStats &stats)
+ 		r = src1[x];
+ 		g2 = src1[x + 1];
+ 		g = (g + g2) / 2;
++		if (processFocus &&
++		    focus_.processColumn(window_.x + x * 4 / 5))
++			focus_.addSample(statsBufferIndex, stats, g, 0);
+ 		/* Data is already 8 bits, divide by 1 */
+ 		SWSTATS_ACCUMULATE_LINE_STATS(1)
+ 	}
++	if (processFocus)
++		focus_.finishLine(statsBufferIndex);
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+ }
+@@ -340,7 +377,9 @@ void SwStatsCpu::startFrame(uint32_t frame)
+ 	for (auto &s : stats_) {
+ 		s.sum_ = RGB<uint64_t>({ 0, 0, 0 });
+ 		s.yHistogram.fill(0);
++		SwStatsCpuFocus::reset(s);
+ 	}
++	focus_.startFrame();
+ }
+ 
+ /**
+@@ -357,11 +396,13 @@ void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId)
+ 	if (valid) {
+ 		sharedStats_->sum_ = RGB<uint64_t>({ 0, 0, 0 });
+ 		sharedStats_->yHistogram.fill(0);
++		SwStatsCpuFocus::reset(*sharedStats_);
+ 		for (const auto &s : stats_) {
+ 			sharedStats_->sum_ += s.sum_;
+ 			for (unsigned int j = 0; j < SwIspStats::kYHistogramSize; j++)
+ 				sharedStats_->yHistogram[j] += s.yHistogram[j];
+ 		}
++		focus_.merge(*sharedStats_, stats_);
+ 	}
+ 
+ 	sharedStats_->valid = valid;
+@@ -505,6 +546,8 @@ void SwStatsCpu::setWindow(const Rectangle &window)
+ 	window_.width = (window_.width > xShift_ ? window_.width - xShift_ : 0);
+ 	window_.width &= ~(patternSize_.width - 1);
+ 	window_.height &= ~(patternSize_.height - 1);
++
++	focus_.configure(window_, stats_.size());
+ }
+ 
+ void SwStatsCpu::processBayerFrame2(MappedFrameBuffer &in)
+@@ -524,7 +567,8 @@ void SwStatsCpu::processBayerFrame2(MappedFrameBuffer &in)
+ 		/* linePointers[0] is not used by any stats0_ functions */
+ 		linePointers[1] = src;
+ 		linePointers[2] = src + stride_;
+-		(this->*stats0_)(linePointers, stats_[0]);
++		(this->*stats0_)(linePointers, stats_[0], 0,
++				 focus_.processLine(window_.y + y));
+ 		src += stride_ * 2;
+ 	}
+ }
+diff --git a/src/libcamera/software_isp/swstats_cpu_focus.cpp b/src/libcamera/software_isp/swstats_cpu_focus.cpp
+new file mode 100644
+index 00000000..865df2a6
+--- /dev/null
++++ b/src/libcamera/software_isp/swstats_cpu_focus.cpp
+@@ -0,0 +1,192 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * Copyright (C) 2026, Kostik
++ *
++ * CPU based software focus statistics helper
++ */
++
++#include "libcamera/internal/software_isp/swstats_cpu_focus.h"
++
++#include <algorithm>
++#include <stdint.h>
++
++#include <libcamera/base/log.h>
++
++namespace libcamera {
++
++/**
++ * \class SwStatsCpuFocus
++ * \brief Gather a central raw-Bayer focus statistic during CPU statistics
++ *
++ * The helper receives the averaged green value from every sample already used
++ * by SwStatsCpu. It converts all supported Bayer depths to the same 8-bit
++ * range, then accumulates squared horizontal and vertical differences over the
++ * central 50% of the statistics window. The raw sum and gradient count are
++ * kept separate so the autofocus algorithm can normalize them by sample count
++ * and mean luminance.
++ *
++ * Each CPU worker owns separate line state. merge() restores the vertical
++ * gradients between adjacent worker segments, making the final result
++ * independent of the number of workers.
++ */
++
++namespace {
++
++unsigned int alignUp(unsigned int value, unsigned int alignment)
++{
++	return (value + alignment - 1) & ~(alignment - 1);
++}
++
++unsigned int alignDown(unsigned int value, unsigned int alignment)
++{
++	return value & ~(alignment - 1);
++}
++
++} /* namespace */
++
++void SwStatsCpuFocus::configure(const Rectangle &statsWindow,
++				unsigned int bufferCount)
++{
++	const unsigned int left = alignUp(statsWindow.width / 4, kSampleStep);
++	const unsigned int right = alignDown(statsWindow.width - statsWindow.width / 4,
++					     kSampleStep);
++	const unsigned int top = alignUp(statsWindow.height / 4, kSampleStep);
++	const unsigned int bottom = alignDown(statsWindow.height - statsWindow.height / 4,
++					      kSampleStep);
++
++	window_.x = statsWindow.x + std::min(left, right);
++	window_.y = statsWindow.y + std::min(top, bottom);
++	window_.width = right > left ? right - left : 0;
++	window_.height = bottom > top ? bottom - top : 0;
++
++	sampleColumns_ = window_.width / kSampleStep;
++	buffers_.clear();
++	buffers_.resize(bufferCount);
++	for (BufferState &state : buffers_) {
++		state.firstLine.resize(sampleColumns_);
++		state.previousLine.resize(sampleColumns_);
++	}
++}
++
++void SwStatsCpuFocus::startFrame()
++{
++	for (BufferState &state : buffers_) {
++		state.sampleIndex = 0;
++		state.leftValid = false;
++		state.previousLineValid = false;
++		state.hasLines = false;
++		state.lineActive = false;
++	}
++}
++
++bool SwStatsCpuFocus::processLine(unsigned int y) const
++{
++	return y >= static_cast<unsigned int>(window_.y) &&
++	       y < window_.y + window_.height;
++}
++
++bool SwStatsCpuFocus::processColumn(unsigned int x) const
++{
++	return x >= static_cast<unsigned int>(window_.x) &&
++	       x < window_.x + window_.width;
++}
++
++void SwStatsCpuFocus::startLine(unsigned int bufferIndex)
++{
++	ASSERT(bufferIndex < buffers_.size());
++
++	BufferState &state = buffers_[bufferIndex];
++	state.sampleIndex = 0;
++	state.leftValid = false;
++	state.lineActive = true;
++}
++
++void SwStatsCpuFocus::addSample(unsigned int bufferIndex, SwIspStats &stats,
++				uint16_t green, unsigned int rightShift)
++{
++	ASSERT(bufferIndex < buffers_.size());
++	ASSERT(rightShift < 16);
++
++	BufferState &state = buffers_[bufferIndex];
++	ASSERT(state.lineActive);
++	ASSERT(state.sampleIndex < sampleColumns_);
++
++	const uint8_t value = std::min<unsigned int>(green >> rightShift, 255);
++	stats.focusGreenSum += value;
++	stats.focusGreenSamples++;
++
++	const auto accumulate = [&stats, value](uint8_t neighbour) {
++		const int32_t difference = static_cast<int32_t>(value) - neighbour;
++		stats.focusGradientSum +=
++			static_cast<uint64_t>(difference * difference);
++		stats.focusGradientSamples++;
++	};
++
++	if (state.leftValid)
++		accumulate(state.left);
++	if (state.previousLineValid)
++		accumulate(state.previousLine[state.sampleIndex]);
++
++	state.previousLine[state.sampleIndex] = value;
++	state.sampleIndex++;
++	state.left = value;
++	state.leftValid = true;
++}
++
++void SwStatsCpuFocus::finishLine(unsigned int bufferIndex)
++{
++	ASSERT(bufferIndex < buffers_.size());
++
++	BufferState &state = buffers_[bufferIndex];
++	ASSERT(state.lineActive);
++	ASSERT(state.sampleIndex == sampleColumns_);
++
++	if (!state.hasLines)
++		state.firstLine = state.previousLine;
++	state.hasLines = sampleColumns_ > 0;
++	state.previousLineValid = sampleColumns_ > 0;
++	state.lineActive = false;
++}
++
++void SwStatsCpuFocus::reset(SwIspStats &stats)
++{
++	stats.focusGradientSum = 0;
++	stats.focusGradientSamples = 0;
++	stats.focusGreenSum = 0;
++	stats.focusGreenSamples = 0;
++}
++
++void SwStatsCpuFocus::merge(SwIspStats &destination,
++			    const std::vector<SwIspStats> &sources) const
++{
++	ASSERT(sources.size() == buffers_.size());
++
++	const BufferState *previous = nullptr;
++	for (unsigned int i = 0; i < sources.size(); ++i) {
++		const SwIspStats &source = sources[i];
++		const BufferState &state = buffers_[i];
++
++		destination.focusGradientSum += source.focusGradientSum;
++		destination.focusGradientSamples += source.focusGradientSamples;
++		destination.focusGreenSum += source.focusGreenSum;
++		destination.focusGreenSamples += source.focusGreenSamples;
++
++		if (!state.hasLines)
++			continue;
++
++		if (previous) {
++			for (unsigned int x = 0; x < sampleColumns_; ++x) {
++				const int32_t difference =
++					static_cast<int32_t>(state.firstLine[x]) -
++					previous->previousLine[x];
++				destination.focusGradientSum +=
++					static_cast<uint64_t>(difference * difference);
++				destination.focusGradientSamples++;
++			}
++		}
++
++		previous = &state;
++	}
++}
++
++} /* namespace libcamera */
+diff --git a/test/meson.build b/test/meson.build
+index e715f474..af99aaaa 100644
+--- a/test/meson.build
++++ b/test/meson.build
+@@ -69,6 +69,7 @@ internal_tests = [
+     {'name': 'shared-fd', 'sources': ['shared-fd.cpp']},
+     {'name': 'simple-pipeline-lens', 'sources': ['simple-pipeline-lens.cpp']},
+     {'name': 'signal-threads', 'sources': ['signal-threads.cpp']},
++    {'name': 'swstats-cpu-focus', 'sources': ['swstats-cpu-focus.cpp']},
+     {'name': 'threads', 'sources': 'threads.cpp', 'dependencies': [libthreads]},
+     {'name': 'timer', 'sources': ['timer.cpp']},
+     {'name': 'timer-fail', 'sources': ['timer-fail.cpp'], 'should_fail': true},
+diff --git a/test/swstats-cpu-focus.cpp b/test/swstats-cpu-focus.cpp
+new file mode 100644
+index 00000000..363d3bbd
+--- /dev/null
++++ b/test/swstats-cpu-focus.cpp
+@@ -0,0 +1,346 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright (C) 2026, Kostik
++ *
++ * CPU software focus-statistics tests
++ */
++
++#include <array>
++#include <chrono>
++#include <cmath>
++#include <iostream>
++#include <limits>
++#include <sys/mman.h>
++
++#include <libcamera/camera_manager.h>
++#include <libcamera/formats.h>
++#include <libcamera/stream.h>
++
++#include "libcamera/internal/software_isp/swstats_cpu.h"
++#include "libcamera/internal/software_isp/swstats_cpu_focus.h"
++
++#include "test.h"
++
++using namespace libcamera;
++using namespace std;
++
++namespace {
++
++template<std::size_t Size>
++void addLine(SwStatsCpuFocus &focus, unsigned int bufferIndex,
++	     SwIspStats &stats, const array<uint16_t, Size> &values,
++	     unsigned int rightShift)
++{
++	focus.startLine(bufferIndex);
++	for (uint16_t value : values)
++		focus.addSample(bufferIndex, stats, value, rightShift);
++	focus.finishLine(bufferIndex);
++}
++
++SwIspStats checkerboardMetric(uint16_t high, unsigned int rightShift)
++{
++	SwStatsCpuFocus focus;
++	SwIspStats stats{};
++
++	focus.configure(Rectangle(0, 0, 16, 16), 1);
++	focus.startFrame();
++	SwStatsCpuFocus::reset(stats);
++	addLine(focus, 0, stats, array<uint16_t, 2>{ 0, high }, rightShift);
++	addLine(focus, 0, stats, array<uint16_t, 2>{ high, 0 }, rightShift);
++
++	return stats;
++}
++
++double normalizedMetric(const SwIspStats &stats)
++{
++	const double gradientRms =
++		sqrt(static_cast<double>(stats.focusGradientSum) /
++		     stats.focusGradientSamples);
++	const double meanGreen =
++		static_cast<double>(stats.focusGreenSum) / stats.focusGreenSamples;
++
++	return gradientRms / meanGreen;
++}
++
++bool checkSharedStats(SwStatsCpu &stats)
++{
++	void *mem = mmap(nullptr, sizeof(SwIspStats), PROT_READ, MAP_SHARED,
++			 stats.getStatsFD().get(), 0);
++	if (mem == MAP_FAILED)
++		return false;
++
++	const SwIspStats result = *static_cast<SwIspStats *>(mem);
++	munmap(mem, sizeof(SwIspStats));
++
++	return result.valid && result.focusGradientSum == 260100 &&
++	       result.focusGradientSamples == 4 &&
++	       result.focusGreenSum == 510 && result.focusGreenSamples == 4;
++}
++
++template<typename Pixel>
++bool checkUnpackedFormat(CameraManager &cm, const PixelFormat &format,
++			 uint16_t high)
++{
++	SwStatsCpu stats(cm);
++	StreamConfiguration config{};
++	config.pixelFormat = format;
++	config.size = Size(16, 16);
++	config.stride = sizeof(Pixel) * config.size.width;
++	config.frameSize = config.stride * config.size.height;
++	if (!stats.isValid() || stats.configure(config))
++		return false;
++
++	stats.setWindow(Rectangle(config.size));
++	stats.startFrame(0);
++
++	const array<uint16_t, 4> first{ 64, 0, high, 64 };
++	const array<uint16_t, 4> second{ 64, high, 0, 64 };
++	array<Pixel, 16> firstLine{};
++	array<Pixel, 16> secondLine{};
++	for (unsigned int block = 0; block < first.size(); ++block) {
++		for (unsigned int x = 0; x < 4; ++x) {
++			firstLine[block * 4 + x] = first[block];
++			secondLine[block * 4 + x] = second[block];
++		}
++	}
++
++	const uint8_t *firstLines[] = {
++		nullptr,
++		reinterpret_cast<const uint8_t *>(firstLine.data()),
++		reinterpret_cast<const uint8_t *>(firstLine.data()),
++	};
++	const uint8_t *secondLines[] = {
++		nullptr,
++		reinterpret_cast<const uint8_t *>(secondLine.data()),
++		reinterpret_cast<const uint8_t *>(secondLine.data()),
++	};
++	stats.processLine0(0, 4, firstLines);
++	stats.processLine0(0, 8, secondLines);
++	stats.finishFrame(0, 0);
++
++	return checkSharedStats(stats);
++}
++
++bool checkPacked10Format(CameraManager &cm, const PixelFormat &format)
++{
++	SwStatsCpu stats(cm);
++	StreamConfiguration config{};
++	config.pixelFormat = format;
++	config.size = Size(16, 16);
++	config.stride = config.size.width * 5 / 4;
++	config.frameSize = config.stride * config.size.height;
++	if (!stats.isValid() || stats.configure(config))
++		return false;
++
++	stats.setWindow(Rectangle(config.size));
++	stats.startFrame(0);
++
++	const array<uint8_t, 4> first{ 64, 0, 255, 64 };
++	const array<uint8_t, 4> second{ 64, 255, 0, 64 };
++	array<uint8_t, 20> firstLine{};
++	array<uint8_t, 20> secondLine{};
++	for (unsigned int block = 0; block < first.size(); ++block) {
++		for (unsigned int x = 0; x < 4; ++x) {
++			firstLine[block * 5 + x] = first[block];
++			secondLine[block * 5 + x] = second[block];
++		}
++	}
++
++	const uint8_t *firstLines[] = {
++		nullptr, firstLine.data(), firstLine.data(),
++	};
++	const uint8_t *secondLines[] = {
++		nullptr, secondLine.data(), secondLine.data(),
++	};
++	stats.processLine0(0, 4, firstLines);
++	stats.processLine0(0, 8, secondLines);
++	stats.finishFrame(0, 0);
++
++	return checkSharedStats(stats);
++}
++
++class SwStatsCpuFocusTest : public Test
++{
++protected:
++	int run() override
++	{
++		SwStatsCpuFocus focus;
++		focus.configure(Rectangle(2, 6, 16, 16), 1);
++
++		if (focus.window() != Rectangle(6, 10, 8, 8) ||
++		    focus.processLine(9) || !focus.processLine(10) ||
++		    !focus.processLine(17) || focus.processLine(18) ||
++		    focus.processColumn(5) || !focus.processColumn(6) ||
++		    !focus.processColumn(13) || focus.processColumn(14)) {
++			cerr << "Central focus window geometry is wrong" << endl;
++			return TestFail;
++		}
++
++		focus.configure(Rectangle(0, 0, 4, 4), 1);
++		if (!focus.window().isNull() || focus.processLine(0) ||
++		    focus.processColumn(0)) {
++			cerr << "Undersized focus window is not inert" << endl;
++			return TestFail;
++		}
++
++		const SwIspStats sharp = checkerboardMetric(255, 0);
++		const SwIspStats soft = checkerboardMetric(32, 0);
++		const SwIspStats flat = checkerboardMetric(0, 0);
++		const SwIspStats dark = checkerboardMetric(4, 2);
++		const SwIspStats clipped = checkerboardMetric(1023, 2);
++
++		if (sharp.focusGradientSum != 260100 ||
++		    sharp.focusGradientSamples != 4 ||
++		    sharp.focusGreenSum != 510 || sharp.focusGreenSamples != 4 ||
++		    soft.focusGradientSum != 4096 ||
++		    soft.focusGradientSamples != 4 ||
++		    flat.focusGradientSum != 0 ||
++		    flat.focusGradientSamples != 4 ||
++		    dark.focusGradientSum != 4 ||
++		    dark.focusGradientSamples != 4 ||
++		    clipped.focusGradientSum != sharp.focusGradientSum ||
++		    clipped.focusGradientSamples != sharp.focusGradientSamples ||
++		    clipped.focusGreenSum != sharp.focusGreenSum ||
++		    clipped.focusGreenSamples != sharp.focusGreenSamples) {
++			cerr << "Sharp, soft, flat, dark or clipped metric is wrong" << endl;
++			return TestFail;
++		}
++
++		const SwIspStats eightBit = checkerboardMetric(200, 0);
++		const SwIspStats tenBit = checkerboardMetric(800, 2);
++		const SwIspStats twelveBit = checkerboardMetric(3200, 4);
++		const SwIspStats halfContrast = checkerboardMetric(100, 0);
++		if (eightBit.focusGradientSum != 160000 ||
++		    tenBit.focusGradientSum != eightBit.focusGradientSum ||
++		    twelveBit.focusGradientSum != eightBit.focusGradientSum ||
++		    halfContrast.focusGradientSum * 4 !=
++			eightBit.focusGradientSum ||
++		    abs(normalizedMetric(eightBit) -
++			normalizedMetric(halfContrast)) > 0.000001) {
++			cerr << "Bit-depth scaling or quadratic response is wrong" << endl;
++			return TestFail;
++		}
++
++		SwIspStats first{};
++		SwIspStats second{};
++		SwIspStats merged{};
++		focus.configure(Rectangle(0, 0, 16, 16), 2);
++		focus.startFrame();
++		addLine(focus, 0, first, array<uint16_t, 2>{ 0, 200 }, 0);
++		addLine(focus, 1, second, array<uint16_t, 2>{ 0, 100 }, 0);
++		focus.merge(merged, { first, second });
++		if (first.focusGradientSum != 40000 ||
++		    second.focusGradientSum != 10000 ||
++		    merged.focusGradientSum != 60000 ||
++		    merged.focusGradientSamples != 4 ||
++		    merged.focusGreenSum != 300 ||
++		    merged.focusGreenSamples != 4) {
++			cerr << "Per-buffer state or merge is wrong" << endl;
++			return TestFail;
++		}
++
++		first.sum_ = RGB<uint64_t>({ 1, 2, 3 });
++		first.yHistogram[0] = 7;
++		SwStatsCpuFocus::reset(first);
++		if (first.focusGradientSum || first.focusGradientSamples ||
++		    first.focusGreenSum || first.focusGreenSamples ||
++		    first.sum_.r() != 1 || first.sum_.g() != 2 ||
++		    first.sum_.b() != 3 || first.yHistogram[0] != 7) {
++			cerr << "Focus reset changed existing statistics" << endl;
++			return TestFail;
++		}
++
++		focus.configure(Rectangle(0, 0, 16, 16), 1);
++		focus.startFrame();
++		SwStatsCpuFocus::reset(first);
++		addLine(focus, 0, first, array<uint16_t, 2>{ 0, 200 }, 0);
++		addLine(focus, 0, first, array<uint16_t, 2>{ 0, 200 }, 0);
++		if (first.focusGradientSum != 80000 ||
++		    first.focusGradientSamples != 4) {
++			cerr << "Vertical state did not span sampled rows" << endl;
++			return TestFail;
++		}
++		focus.startFrame();
++		SwStatsCpuFocus::reset(first);
++		addLine(focus, 0, first, array<uint16_t, 2>{ 0, 200 }, 0);
++		if (first.focusGradientSum != 40000 ||
++		    first.focusGradientSamples != 1) {
++			cerr << "Frame reset retained vertical history" << endl;
++			return TestFail;
++		}
++
++		constexpr uint64_t columns = 2048 / SwStatsCpuFocus::kSampleStep;
++		constexpr uint64_t rows = 1536 / SwStatsCpuFocus::kSampleStep;
++		constexpr uint64_t gradients =
++			rows * (columns - 1) + (rows - 1) * columns;
++		constexpr uint64_t maximum = gradients * 255 * 255;
++		if (maximum != 25510608000ULL ||
++		    maximum <= numeric_limits<uint32_t>::max()) {
++			cerr << "Accumulator width does not cover a 4096x3072 frame" << endl;
++			return TestFail;
++		}
++
++		constexpr uint64_t values = rows * columns;
++		constexpr uint64_t greenSum = values / 2 * 255;
++		if (!benchmark(maximum, gradients, greenSum, values))
++			return TestFail;
++
++		CameraManager cm;
++		if (!checkUnpackedFormat<uint8_t>(cm, formats::SBGGR8, 255) ||
++		    !checkUnpackedFormat<uint16_t>(cm, formats::SBGGR10, 1023) ||
++		    !checkUnpackedFormat<uint16_t>(cm, formats::SBGGR12, 4095) ||
++		    !checkPacked10Format(cm, formats::SBGGR10_CSI2P) ||
++		    !checkPacked10Format(cm, formats::SGBRG10_CSI2P)) {
++			cerr << "SwStatsCpu Bayer integration failed" << endl;
++			return TestFail;
++		}
++
++		return TestPass;
++	}
++
++private:
++	bool benchmark(uint64_t expectedSum, uint64_t expectedSamples,
++		       uint64_t expectedGreenSum, uint64_t expectedGreenSamples)
++	{
++		constexpr unsigned int kFrames = 10;
++		constexpr unsigned int kColumns = 2048 / SwStatsCpuFocus::kSampleStep;
++		constexpr unsigned int kRows = 1536 / SwStatsCpuFocus::kSampleStep;
++		SwStatsCpuFocus focus;
++		SwIspStats stats{};
++
++		focus.configure(Rectangle(0, 0, 4096, 3072), 1);
++		const auto begin = chrono::steady_clock::now();
++		for (unsigned int frame = 0; frame < kFrames; ++frame) {
++			focus.startFrame();
++			SwStatsCpuFocus::reset(stats);
++			for (unsigned int y = 0; y < kRows; ++y) {
++				focus.startLine(0);
++				for (unsigned int x = 0; x < kColumns; ++x)
++					focus.addSample(0, stats,
++							((x + y) & 1) ? 1020 : 0, 2);
++				focus.finishLine(0);
++			}
++		}
++		const auto elapsed = chrono::duration_cast<chrono::microseconds>(
++			chrono::steady_clock::now() - begin);
++
++		cout << "Focus helper benchmark: " << kFrames
++		     << " synthetic 4096x3072 frames, central 50% ROI, "
++		     << elapsed.count() / kFrames << " us/frame; final sum="
++		     << stats.focusGradientSum << endl;
++
++		if (stats.focusGradientSum != expectedSum ||
++		    stats.focusGradientSamples != expectedSamples ||
++		    stats.focusGreenSum != expectedGreenSum ||
++		    stats.focusGreenSamples != expectedGreenSamples) {
++			cerr << "Full-size accumulation overflowed or lost samples" << endl;
++			return false;
++		}
++
++		return true;
++	}
++};
++
++} /* namespace */
++
++TEST_REGISTER(SwStatsCpuFocusTest)
+-- 
+2.43.0
+

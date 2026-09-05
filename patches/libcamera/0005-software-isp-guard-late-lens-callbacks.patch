@@ -1,0 +1,243 @@
+From 91284a09b1b4ed2ab6af988cb6ce30fe030f7ac7 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Fri, 4 Sep 2026 17:38:58 +0300
+Subject: [PATCH] software: guard late lens callbacks during stop
+
+---
+ .../internal/software_isp/meson.build         |  1 +
+ .../internal/software_isp/software_isp.h      |  2 +
+ .../software_isp/software_isp_lens_gate.h     | 41 ++++++++++
+ src/libcamera/software_isp/software_isp.cpp   | 19 ++++-
+ test/meson.build                              |  1 +
+ test/software-isp-lens-gate.cpp               | 76 +++++++++++++++++++
+ 6 files changed, 136 insertions(+), 4 deletions(-)
+ create mode 100644 include/libcamera/internal/software_isp/software_isp_lens_gate.h
+ create mode 100644 test/software-isp-lens-gate.cpp
+
+diff --git a/include/libcamera/internal/software_isp/meson.build b/include/libcamera/internal/software_isp/meson.build
+index cde349f9..5dbe27ea 100644
+--- a/include/libcamera/internal/software_isp/meson.build
++++ b/include/libcamera/internal/software_isp/meson.build
+@@ -4,6 +4,7 @@ libcamera_internal_headers += files([
+     'benchmark.h',
+     'debayer_params.h',
+     'software_isp.h',
++    'software_isp_lens_gate.h',
+     'swisp_stats.h',
+     'swstats_cpu.h',
+     'swstats_cpu_focus.h',
+diff --git a/include/libcamera/internal/software_isp/software_isp.h b/include/libcamera/internal/software_isp/software_isp.h
+index af346746..e4ef207e 100644
+--- a/include/libcamera/internal/software_isp/software_isp.h
++++ b/include/libcamera/internal/software_isp/software_isp.h
+@@ -34,6 +34,7 @@
+ #include "libcamera/internal/pipeline_handler.h"
+ #include "libcamera/internal/shared_mem_object.h"
+ #include "libcamera/internal/software_isp/debayer_params.h"
++#include "libcamera/internal/software_isp/software_isp_lens_gate.h"
+ 
+ namespace libcamera {
+ 
+@@ -106,6 +107,7 @@ private:
+ 	DmaBufAllocator dmaHeap_;
+ 	bool ccmEnabled_;
+ 
++	SoftwareIspLensGate lensGate_;
+ 	std::unique_ptr<ipa::soft::IPAProxySoft> ipa_;
+ 	std::deque<FrameBuffer *> queuedInputBuffers_;
+ 	std::deque<FrameBuffer *> queuedOutputBuffers_;
+diff --git a/include/libcamera/internal/software_isp/software_isp_lens_gate.h b/include/libcamera/internal/software_isp/software_isp_lens_gate.h
+new file mode 100644
+index 00000000..cb0faf3d
+--- /dev/null
++++ b/include/libcamera/internal/software_isp/software_isp_lens_gate.h
+@@ -0,0 +1,41 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * Copyright (C) 2026, Kostiantyn Andriiuk
++ *
++ * Software ISP lens lifecycle gate
++ */
++
++#pragma once
++
++#include <utility>
++
++namespace libcamera {
++
++class SoftwareIspLensGate
++{
++public:
++	void start()
++	{
++		running_ = true;
++	}
++
++	void stop()
++	{
++		running_ = false;
++	}
++
++	template<typename Function>
++	bool invoke(Function &&function)
++	{
++		if (!running_)
++			return false;
++
++		std::forward<Function>(function)();
++		return true;
++	}
++
++private:
++	bool running_ = false;
++};
++
++} /* namespace libcamera */
+diff --git a/src/libcamera/software_isp/software_isp.cpp b/src/libcamera/software_isp/software_isp.cpp
+index 40910303..ffc22fd2 100644
+--- a/src/libcamera/software_isp/software_isp.cpp
++++ b/src/libcamera/software_isp/software_isp.cpp
+@@ -367,10 +367,15 @@ int SoftwareIsp::start()
+ 	if (ret)
+ 		return ret;
+ 
++	lensGate_.start();
+ 	ispWorkerThread_.start();
+ 
+-	return debayer_->invokeMethod(&Debayer::start,
+-				      ConnectionTypeBlocking);
++	ret = debayer_->invokeMethod(&Debayer::start,
++				     ConnectionTypeBlocking);
++	if (ret)
++		lensGate_.stop();
++
++	return ret;
+ }
+ 
+ /**
+@@ -381,6 +386,8 @@ int SoftwareIsp::start()
+  */
+ void SoftwareIsp::stop()
+ {
++	lensGate_.stop();
++
+ 	debayer_->invokeMethod(&Debayer::stop,
+ 			       ConnectionTypeBlocking);
+ 
+@@ -431,13 +438,17 @@ void SoftwareIsp::setSensorCtrls(const ControlList &sensorControls)
+ 
+ void SoftwareIsp::setLensPositionFromIpa(uint32_t frame, int32_t position)
+ {
+-	setLensPosition.emit(frame, position);
++	lensGate_.invoke([this, frame, position]() {
++		setLensPosition.emit(frame, position);
++	});
+ }
+ 
+ void SoftwareIsp::setLensPositionResult(uint32_t frame, int32_t position,
+ 					int32_t result)
+ {
+-	ipa_->setLensPositionResult(frame, position, result);
++	lensGate_.invoke([this, frame, position, result]() {
++		ipa_->setLensPositionResult(frame, position, result);
++	});
+ }
+ 
+ void SoftwareIsp::statsReady(uint32_t frame, uint32_t bufferId)
+diff --git a/test/meson.build b/test/meson.build
+index 42a7471f..2b30b56f 100644
+--- a/test/meson.build
++++ b/test/meson.build
+@@ -79,6 +79,7 @@ internal_tests = [
+          include_directories('../src/ipa/simple'),
+          include_directories('../include/libcamera/ipa'),
+      ]},
++    {'name': 'software-isp-lens-gate', 'sources': ['software-isp-lens-gate.cpp']},
+     {'name': 'signal-threads', 'sources': ['signal-threads.cpp']},
+     {'name': 'swstats-cpu-focus', 'sources': ['swstats-cpu-focus.cpp']},
+     {'name': 'threads', 'sources': 'threads.cpp', 'dependencies': [libthreads]},
+diff --git a/test/software-isp-lens-gate.cpp b/test/software-isp-lens-gate.cpp
+new file mode 100644
+index 00000000..4245fedb
+--- /dev/null
++++ b/test/software-isp-lens-gate.cpp
+@@ -0,0 +1,76 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Copyright (C) 2026, Kostiantyn Andriiuk
++ *
++ * Software ISP lens lifecycle gate tests
++ */
++
++#include <iostream>
++
++#include "libcamera/internal/software_isp/software_isp_lens_gate.h"
++
++#include "test.h"
++
++using namespace libcamera;
++using namespace std;
++
++namespace {
++
++class SoftwareIspLensGateTest : public Test
++{
++protected:
++	int run() override
++	{
++		SoftwareIspLensGate gate;
++		unsigned int commands = 0;
++		unsigned int results = 0;
++
++		auto command = [&commands]() { ++commands; };
++		auto result = [&results]() { ++results; };
++
++		if (gate.invoke(command) || gate.invoke(result) || commands ||
++		    results) {
++			cerr << "Inactive gate forwarded a callback" << endl;
++			return TestFail;
++		}
++
++		gate.start();
++		if (!gate.invoke(command) || !gate.invoke(result) || commands != 1 ||
++		    results != 1) {
++			cerr << "Running gate rejected a callback" << endl;
++			return TestFail;
++		}
++
++		/*
++		 * Model a queued setLensPosition callback drained after stop has
++		 * begun. Neither the physical command nor its proxy result may cross
++		 * the SoftwareIsp boundary during teardown.
++		 */
++		gate.stop();
++		if (gate.invoke(command) || gate.invoke(result) || commands != 1 ||
++		    results != 1) {
++			cerr << "Stopping gate forwarded a late lens callback" << endl;
++			return TestFail;
++		}
++
++		/* A new rear-camera session must reactivate the same object. */
++		gate.start();
++		if (!gate.invoke(command) || !gate.invoke(result) || commands != 2 ||
++		    results != 2) {
++			cerr << "Restarted gate rejected a callback" << endl;
++			return TestFail;
++		}
++
++		gate.stop();
++		if (gate.invoke(command) || commands != 2) {
++			cerr << "Second stop forwarded a late callback" << endl;
++			return TestFail;
++		}
++
++		return TestPass;
++	}
++};
++
++} /* namespace */
++
++TEST_REGISTER(SoftwareIspLensGateTest)
+-- 
+2.43.0
+

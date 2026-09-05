@@ -1,0 +1,63 @@
+From d5c13c96b76281677fa13c07638494d3e4e73f6c Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Fri, 4 Sep 2026 14:19:46 +0300
+Subject: [PATCH] ipa: simple: advertise AfState control
+
+---
+ src/ipa/simple/algorithms/af.cpp |  2 ++
+ test/simple-ipa-af.cpp           | 12 +++++++++++-
+ 2 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/src/ipa/simple/algorithms/af.cpp b/src/ipa/simple/algorithms/af.cpp
+index c1735ab1..a2f9fe1d 100644
+--- a/src/ipa/simple/algorithms/af.cpp
++++ b/src/ipa/simple/algorithms/af.cpp
+@@ -135,6 +135,8 @@ int Af::init(IPAContext &context, const ValueNode &tuningData)
+ 			    controls::AfModeAuto);
+ 	context.ctrlMap[&controls::AfTrigger] =
+ 		ControlInfo(controls::AfTriggerValues);
++	context.ctrlMap[&controls::AfState] =
++		ControlInfo(controls::AfStateValues);
+ 
+ 	available_ = true;
+ 	LOG(IPASoftAf, Info)
+diff --git a/test/simple-ipa-af.cpp b/test/simple-ipa-af.cpp
+index d9380b5e..cf5b724e 100644
+--- a/test/simple-ipa-af.cpp
++++ b/test/simple-ipa-af.cpp
+@@ -5,6 +5,7 @@
+  * Simple IPA bounded one-shot autofocus tests
+  */
+ 
++#include <algorithm>
+ #include <cmath>
+ #include <errno.h>
+ #include <functional>
+@@ -201,7 +202,8 @@ protected:
+ 		unique_ptr<ValueNode> tuning = tuningData();
+ 		if (algorithm.init(context, *tuning) || !algorithm.available() ||
+ 		    context.ctrlMap.count(&controls::AfMode) != 1 ||
+-		    context.ctrlMap.count(&controls::AfTrigger) != 1) {
++		    context.ctrlMap.count(&controls::AfTrigger) != 1 ||
++		    context.ctrlMap.count(&controls::AfState) != 1) {
+ 			cerr << "Valid lens and tuning did not advertise AF" << endl;
+ 			return false;
+ 		}
+@@ -214,6 +216,14 @@ protected:
+ 			return false;
+ 		}
+ 
++		const ControlInfo &states = context.ctrlMap.at(&controls::AfState);
++		if (states.values().size() != controls::AfStateValues.size() ||
++		    !std::equal(states.values().begin(), states.values().end(),
++				controls::AfStateValues.begin())) {
++			cerr << "AF did not advertise all output states" << endl;
++			return false;
++		}
++
+ 		IPAContext noLensContext(16);
+ 		Af noLensAlgorithm;
+ 		tuning = tuningData();
+-- 
+2.43.0
+

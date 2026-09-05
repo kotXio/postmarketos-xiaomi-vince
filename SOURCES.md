@@ -125,6 +125,47 @@ using the same pinned vendor tree, Camera SDK and downstream DTS above.
 Mainline [`dw9714.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/media/i2c/dw9714.c)
 was inspected and rejected as protocol-incompatible.
 
+## OV12A10 one-shot autofocus
+
+The libcamera series targets the exact upstream
+[`v0.7.1`](https://gitlab.freedesktop.org/camera/libcamera/-/tree/v0.7.1)
+commit `183e37362f57ff3ce7493abf0bc6f1b57b931f55`. The implementation follows the
+official [`AfMode`, `AfTrigger`, `AfState` and `LensPosition` contract](https://docs.libcamera.org/master/public-api/namespacelibcamera_1_1controls.html)
+and extends the pinned
+[Simple algorithms](https://gitlab.freedesktop.org/camera/libcamera/-/tree/v0.7.1/src/ipa/simple/algorithms),
+[`SwIspStats`](https://gitlab.freedesktop.org/camera/libcamera/-/blob/v0.7.1/include/libcamera/internal/software_isp/swisp_stats.h)
+and [CPU statistics implementation](https://gitlab.freedesktop.org/camera/libcamera/-/blob/v0.7.1/src/libcamera/software_isp/swstats_cpu.cpp).
+
+The review-stage [Simple focus-control patch and discussion](https://patchwork.libcamera.org/patch/26241/)
+and Pavel Machek's experimental
+[`millicam_af_6`](https://gitlab.com/tui/libcamera/-/tree/millicam_af_6)
+[two-phase prototype](https://gitlab.com/tui/libcamera/-/commit/da42da564afa50ef938a230253ac930551bd414b)
+were design references for plumbing, a central Bayer metric, settling and
+two-phase search. They were not applied unchanged: their raw `0..100` position
+model and state behavior do not meet the standard control contract or the
+handset's bounded acceptance criteria.
+
+The application patch targets the exact
+[Plasma Camera `v2.1.1` source](https://invent.kde.org/plasma-mobile/plasma-camera/-/tree/v2.1.1).
+It uses only standard libcamera controls and sends one explicit rear-session
+trigger; it does not drive V4L2 subdevices or calculate focus itself.
+
+Two phone-discovered teardown failures were compared with upstream discussion.
+The invalid delayed-control class matches the
+[libcamera-devel report](https://lists.libcamera.org/pipermail/libcamera-devel/2025-September/053345.html)
+and [Patchwork 24468](https://patchwork.libcamera.org/patch/24468/). The related
+[SoftwareIsp stop discussion](https://lists.libcamera.org/pipermail/libcamera-devel/2025-July/051424.html)
+and [earlier stop cleanup](https://patchwork.libcamera.org/patch/21719/)
+explain why queued SoftISP messages are drained during teardown. The project
+guards are locally authored and retain libcamera's generic type assertion.
+
+The final tested source heads are
+`3a6c4602cb797e7418ad67bcf790c08f54799e2a` for libcamera and
+`c43aef4dd36fbc70528869ad7d30ce01252a045f` for Plasma Camera. The derived
+`242..726` tuning endpoints came from checksum-valid EEPROM data on the single
+test handset. The raw EEPROM is not published, and the values are not claimed
+to be universal for every `vince`.
+
 ## IPA and camera policy
 
 The project-authored `blackLevel: 4096` tuning comes from the stock RAW10
@@ -165,7 +206,10 @@ This work has not yet produced a custom browser package.
   or tables were reused.
 - The Android OV12A10 `36.61 MHz` MCLK experiment was rejected in favor of the
   later `24 MHz` value.
-- Autofocus review patches, EEPROM contents, flash/torch experiments and
-  `libva-v4l2-request` are not part of the current public source or release.
+- The review-stage autofocus patches above were not applied unchanged. The
+  public autofocus series is the separately tested project implementation;
+  raw EEPROM contents remain excluded.
+- Flash/torch experiments and `libva-v4l2-request` are not part of the current
+  public source or release.
 - Proprietary firmware, camera blobs, EEPROM dumps, photos and recordings are
   not redistributed by this project.

@@ -1,0 +1,410 @@
+From c43aef4dd36fbc70528869ad7d30ce01252a045f Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Fri, 4 Sep 2026 11:59:12 +0300
+Subject: [PATCH] Add one-shot startup autofocus
+
+---
+ CMakeLists.txt                     |   1 +
+ src/CMakeLists.txt                 |   9 ++
+ src/plasmacamera/autofocuspolicy.h |  72 +++++++++++++++
+ src/plasmacamera/worker.cpp        |  46 ++++++++++
+ src/plasmacamera/worker.h          |   6 ++
+ src/tests/autofocuspolicytest.cpp  | 143 +++++++++++++++++++++++++++++
+ 6 files changed, 277 insertions(+)
+ create mode 100644 src/plasmacamera/autofocuspolicy.h
+ create mode 100644 src/tests/autofocuspolicytest.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8f2339f..655a573 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -9,6 +9,7 @@ set(PROJECT_VERSION "2.1.1")
+ project(plasma-camera VERSION ${PROJECT_VERSION})
+ 
+ include(FeatureSummary)
++include(CTest)
+ 
+ find_package(ECM ${KF_MIN_VERSION} REQUIRED NO_MODULE)
+ 
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 0c676f7..e4793de 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -13,6 +13,7 @@ set(plasma-camera_SRCS
+     plasmacamera/path.cpp
+     plasmacamera/settings.cpp
+     plasmacamera/worker.cpp
++    plasmacamera/autofocuspolicy.h
+     resources.qrc
+ )
+ 
+@@ -38,6 +39,14 @@ find_package(PkgConfig)
+ pkg_check_modules(LIBCAMERA REQUIRED IMPORTED_TARGET libcamera)
+ include_directories(${CMAKE_SOURCE_DIR} ${LIBCAMERA_INCLUDE_DIRS})
+ 
++if(BUILD_TESTING AND NOT ANDROID)
++    add_executable(plasma-camera-autofocus-test
++        tests/autofocuspolicytest.cpp
++    )
++    target_link_libraries(plasma-camera-autofocus-test PkgConfig::LIBCAMERA)
++    add_test(NAME plasma-camera-autofocus COMMAND plasma-camera-autofocus-test)
++endif()
++
+ kconfig_add_kcfg_files(plasma-camera GENERATE_MOC camerasettings.kcfgc)
+ 
+ if(ANDROID)
+diff --git a/src/plasmacamera/autofocuspolicy.h b/src/plasmacamera/autofocuspolicy.h
+new file mode 100644
+index 0000000..37b0263
+--- /dev/null
++++ b/src/plasmacamera/autofocuspolicy.h
+@@ -0,0 +1,72 @@
++// SPDX-FileCopyrightText: 2026 Kostiantyn Andriiuk
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#pragma once
++
++#include <algorithm>
++#include <cstdint>
++#include <vector>
++
++#include <libcamera/control_ids.h>
++#include <libcamera/controls.h>
++
++class StartupAutofocusPolicy
++{
++public:
++    void beginSession(bool rearCamera, const libcamera::ControlInfoMap &controls)
++    {
++        supported_ = rearCamera
++            && supportsValue(controls, libcamera::controls::AfMode, libcamera::controls::AfModeAuto)
++            && supportsValue(controls, libcamera::controls::AfTrigger, libcamera::controls::AfTriggerStart);
++        pending_ = supported_;
++    }
++
++    void endSession()
++    {
++        supported_ = false;
++        pending_ = false;
++    }
++
++    bool apply(libcamera::ControlList &controls)
++    {
++        if (!pending_) {
++            return false;
++        }
++
++        controls.set(libcamera::controls::AfMode, libcamera::controls::AfModeAuto);
++        controls.set(libcamera::controls::AfTrigger, libcamera::controls::AfTriggerStart);
++        pending_ = false;
++        return true;
++    }
++
++    bool supported() const
++    {
++        return supported_;
++    }
++
++    bool pending() const
++    {
++        return pending_;
++    }
++
++private:
++    static bool supportsValue(const libcamera::ControlInfoMap &controls,
++                              const libcamera::Control<int32_t> &control,
++                              int32_t value)
++    {
++        const auto it = controls.find(&control);
++        if (it == controls.end()) {
++            return false;
++        }
++
++        const std::vector<libcamera::ControlValue> &values = it->second.values();
++        return std::any_of(values.begin(), values.end(), [value](const libcamera::ControlValue &candidate) {
++            return candidate.type() == libcamera::ControlTypeInteger32
++                && !candidate.isArray()
++                && candidate.get<int32_t>() == value;
++        });
++    }
++
++    bool supported_ = false;
++    bool pending_ = false;
++};
+diff --git a/src/plasmacamera/worker.cpp b/src/plasmacamera/worker.cpp
+index 65a6b37..57c26b3 100644
+--- a/src/plasmacamera/worker.cpp
++++ b/src/plasmacamera/worker.cpp
+@@ -13,6 +13,27 @@ static const QMap<libcamera::PixelFormat, QImage::Format> NATIVE_FORMATS{
+     {libcamera::formats::RGB565, QImage::Format_RGB16},
+ };
+ 
++namespace
++{
++
++const char *autofocusStateName(int32_t state)
++{
++    switch (state) {
++    case libcamera::controls::AfStateIdle:
++        return "Idle";
++    case libcamera::controls::AfStateScanning:
++        return "Scanning";
++    case libcamera::controls::AfStateFocused:
++        return "Focused";
++    case libcamera::controls::AfStateFailed:
++        return "Failed";
++    default:
++        return "Unknown";
++    }
++}
++
++}
++
+ Worker::Worker() = default;
+ 
+ Worker::~Worker() = default;
+@@ -229,6 +250,8 @@ void Worker::processRequestData()
+         request = m_doneQueue.dequeue();
+     }
+ 
++    logAutofocusState(request->metadata());
++
+     if (!request->buffers().count(m_stream)) {
+         return;
+     }
+@@ -251,6 +274,17 @@ void Worker::processRequestData()
+     }
+ }
+ 
++void Worker::logAutofocusState(const libcamera::ControlList &metadata)
++{
++    const std::optional<int32_t> state = metadata.get(libcamera::controls::AfState);
++    if (!state || state == m_lastAutofocusState) {
++        return;
++    }
++
++    m_lastAutofocusState = state;
++    qInfo() << "Autofocus state:" << autofocusStateName(*state) << "(" << *state << ")";
++}
++
+ void Worker::startViewFinder()
+ {
+     if (!m_camera) {
+@@ -259,6 +293,13 @@ void Worker::startViewFinder()
+ 
+     qDebug() << "Starting view finder in worker";
+ 
++    const std::optional<int> location = m_camera->properties().get(libcamera::properties::Location);
++    const bool rearCamera = location && *location == libcamera::properties::CameraLocationBack;
++    m_startupAutofocus.beginSession(rearCamera, m_camera->controls());
++    m_lastAutofocusState.reset();
++    qInfo() << "Startup autofocus:" << (m_startupAutofocus.supported() ? "available" : "disabled")
++            << "rear camera:" << rearCamera;
++
+     /*
+      * https://libcamera.org/api-html/namespacelibcamera.html#a295d1f5e7828d95c0b0aabc0a8baac03
+      * The StillCapture and Viewfinder roles both generate a config that uses the same resolution
+@@ -281,6 +322,9 @@ void Worker::startViewFinder()
+ 
+     // Add all requests
+     for (std::unique_ptr<libcamera::Request> &request : m_requests) {
++        if (m_startupAutofocus.apply(request->controls())) {
++            qInfo() << "Queued one startup autofocus trigger";
++        }
+         if (int ret = m_camera->queueRequest(request.get()); ret < 0) {
+             setError(ret);
+             return;
+@@ -295,6 +339,8 @@ void Worker::stopViewFinder()
+ {
+     qDebug() << "stop view finder";
+     m_framePollTimer->stop();
++    m_startupAutofocus.endSession();
++    m_lastAutofocusState.reset();
+ 
+     if (m_camera) {
+         // All pending requests are cancelled
+diff --git a/src/plasmacamera/worker.h b/src/plasmacamera/worker.h
+index f2e92c7..0113dd7 100644
+--- a/src/plasmacamera/worker.h
++++ b/src/plasmacamera/worker.h
+@@ -13,9 +13,11 @@
+ #include <QCameraFormat>
+ 
+ #include <memory>
++#include <optional>
+ #include <libcamera/libcamera.h>
+ #include <libcamera/framebuffer.h>
+ 
++#include "autofocuspolicy.h"
+ #include "converter.h"
+ #include "image.h"
+ #include "settings.h"
+@@ -121,6 +123,7 @@ private:
+ 
+     void requestComplete(libcamera::Request *request);
+     void processRequestData(); // convert buffers to QImage stored at m_image
++    void logAutofocusState(const libcamera::ControlList &metadata);
+ 
+     bool m_error = false;
+     QString m_errorString;
+@@ -160,5 +163,8 @@ private:
+     QMutex m_doneMutex;
+     QMutex m_freeMutex;
+ 
++    StartupAutofocusPolicy m_startupAutofocus;
++    std::optional<int32_t> m_lastAutofocusState;
++
+     Settings m_settings;
+ };
+diff --git a/src/tests/autofocuspolicytest.cpp b/src/tests/autofocuspolicytest.cpp
+new file mode 100644
+index 0000000..74f39e2
+--- /dev/null
++++ b/src/tests/autofocuspolicytest.cpp
+@@ -0,0 +1,143 @@
++// SPDX-FileCopyrightText: 2026 Kostiantyn Andriiuk
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#include <array>
++#include <cstdint>
++#include <iostream>
++#include <optional>
++#include <utility>
++
++#include <libcamera/control_ids.h>
++#include <libcamera/controls.h>
++
++#include "src/plasmacamera/autofocuspolicy.h"
++
++namespace
++{
++
++libcamera::ControlInfoMap controls(bool includeMode, int32_t mode,
++                                   bool includeTrigger, int32_t trigger)
++{
++    libcamera::ControlInfoMap::Map map;
++
++    if (includeMode) {
++        const std::array<libcamera::ControlValue, 1> values{ mode };
++        map.emplace(&libcamera::controls::AfMode,
++                    libcamera::ControlInfo(libcamera::Span<const libcamera::ControlValue>{ values }, mode));
++    }
++
++    if (includeTrigger) {
++        const std::array<libcamera::ControlValue, 1> values{ trigger };
++        map.emplace(&libcamera::controls::AfTrigger,
++                    libcamera::ControlInfo(libcamera::Span<const libcamera::ControlValue>{ values }, trigger));
++    }
++
++    return libcamera::ControlInfoMap(std::move(map), libcamera::controls::controls);
++}
++
++bool hasStartupControls(const libcamera::ControlList &requestControls)
++{
++    const std::optional<int32_t> mode = requestControls.get(libcamera::controls::AfMode);
++    const std::optional<int32_t> trigger = requestControls.get(libcamera::controls::AfTrigger);
++
++    return mode && *mode == libcamera::controls::AfModeAuto
++        && trigger && *trigger == libcamera::controls::AfTriggerStart;
++}
++
++bool testOneShot()
++{
++    StartupAutofocusPolicy policy;
++    const libcamera::ControlInfoMap available = controls(
++        true, libcamera::controls::AfModeAuto,
++        true, libcamera::controls::AfTriggerStart);
++
++    policy.beginSession(true, available);
++    if (!policy.supported() || !policy.pending()) {
++        std::cerr << "Rear Auto/Trigger session was not armed\n";
++        return false;
++    }
++
++    libcamera::ControlList first(libcamera::controls::controls);
++    if (!policy.apply(first) || !hasStartupControls(first) || policy.pending()) {
++        std::cerr << "First request did not consume the startup trigger\n";
++        return false;
++    }
++
++    libcamera::ControlList second(libcamera::controls::controls);
++    if (policy.apply(second) || !second.empty()) {
++        std::cerr << "Startup trigger was repeated\n";
++        return false;
++    }
++
++    policy.beginSession(true, available);
++    libcamera::ControlList nextSession(libcamera::controls::controls);
++    if (!policy.apply(nextSession) || !hasStartupControls(nextSession)) {
++        std::cerr << "A new rear session was not re-armed\n";
++        return false;
++    }
++
++    return true;
++}
++
++bool testCapabilityGates()
++{
++    const libcamera::ControlInfoMap available = controls(
++        true, libcamera::controls::AfModeAuto,
++        true, libcamera::controls::AfTriggerStart);
++    const libcamera::ControlInfoMap noMode = controls(
++        false, 0, true, libcamera::controls::AfTriggerStart);
++    const libcamera::ControlInfoMap manualOnly = controls(
++        true, libcamera::controls::AfModeManual,
++        true, libcamera::controls::AfTriggerStart);
++    const libcamera::ControlInfoMap noTrigger = controls(
++        true, libcamera::controls::AfModeAuto, false, 0);
++    const libcamera::ControlInfoMap cancelOnly = controls(
++        true, libcamera::controls::AfModeAuto,
++        true, libcamera::controls::AfTriggerCancel);
++
++    StartupAutofocusPolicy policy;
++    for (const auto &[rear, info] : {
++             std::pair{ false, &available },
++             std::pair{ true, &noMode },
++             std::pair{ true, &manualOnly },
++             std::pair{ true, &noTrigger },
++             std::pair{ true, &cancelOnly },
++         }) {
++        policy.beginSession(rear, *info);
++        libcamera::ControlList request(libcamera::controls::controls);
++        if (policy.supported() || policy.pending() || policy.apply(request)
++            || !request.empty()) {
++            std::cerr << "Unsupported/front session was armed\n";
++            return false;
++        }
++    }
++
++    policy.beginSession(true, available);
++    policy.beginSession(false, available);
++    libcamera::ControlList switched(libcamera::controls::controls);
++    if (policy.apply(switched)) {
++        std::cerr << "Rear pending trigger leaked into a front session\n";
++        return false;
++    }
++
++    policy.beginSession(true, available);
++    policy.endSession();
++    libcamera::ControlList stopped(libcamera::controls::controls);
++    if (policy.supported() || policy.pending() || policy.apply(stopped)) {
++        std::cerr << "Stopped session retained a pending trigger\n";
++        return false;
++    }
++
++    return true;
++}
++
++}
++
++int main()
++{
++    if (!testOneShot() || !testCapabilityGates()) {
++        return 1;
++    }
++
++    return 0;
++}
+-- 
+2.43.0
+

@@ -7,6 +7,7 @@ branch `7.0.9/main`, base commit
 Apply the files in lexical order. Use `git am` for mail-formatted patches
 `0001`-`0004` and `0010`-`0012`. Use `git apply --unidiff-zero` for plain
 diffs `0005`-`0009`, then commit that group before continuing with `git am`.
+Apply plain diff `0013` with `git apply` after `0012`.
 The `--unidiff-zero` flag is required by the intentionally compact
 zero-context TAS2557/RMI4 diffs. The mixed format preserves the original
 upstream TAS2557 authorship and the exact locally tested changes.
@@ -27,6 +28,7 @@ upstream TAS2557 authorship and the exact locally tested changes.
 | `0010` | Add the physically tested stock sensor modes. |
 | `0011` | Cap unstable 1080p `90 fps` mode near `75 fps`. |
 | `0012` | Add DW9763-compatible lens control and link it to OV12A10. |
+| `0013` | Extend the DW9763 maximum to this handset's tested macro endpoint `726`. |
 
 ## Test boundary
 
@@ -35,5 +37,6 @@ persistent installation. Speaker output, touch across normal boots, five rear
 camera modes and bounded lens movement/parking were physically checked.
 
 `0007` is a failed-suspend safety guard, not a complete suspend/resume fix.
-`0012` exposes bounded manual focus; automatic-focus integration is not part of
-this published set.
+`0013` is required by the separately published one-shot autofocus stack. Its
+maximum came from one checksum-valid handset EEPROM and is not claimed to be a
+universal calibration for every `vince`.

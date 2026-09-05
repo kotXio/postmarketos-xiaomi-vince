@@ -1,6 +1,6 @@
 # Device status
 
-Last updated: 2026-09-04
+Last updated: 2026-09-05
 
 Test device: Xiaomi Redmi 5 Plus (`vince`), `aarch64`, postmarketOS `v26.06`,
 Plasma Mobile, Linux `7.0.9-msm8953` with locally packaged cumulative changes.
@@ -19,9 +19,10 @@ that the same package will work on another release or package baseline.
 | Earpiece | Working | Physically verified. |
 | Microphone | Working | Clean Mic2 route uses ADC2 analog gain `8` and digital level `100%`. |
 | Front camera OV5675 | Working | Live image and still capture physically verified. |
-| Rear camera OV12A10 | Working | Preview/capture and five sensor modes verified. |
-| Rear lens DW9763 | Partial | Manual movement and parking work; autofocus is not implemented. |
+| Rear camera OV12A10 | Working | Preview/capture, five sensor modes and one-shot autofocus verified. |
+| Rear lens DW9763 | Working with limitation | One-shot contrast AF, manual movement, parking and runtime suspend work; the tested `242..726` endpoints are handset-local. |
 | Video codec Venus | Partial | Direct stateful V4L2 H.264/HEVC works; GStreamer and paced FFmpeg H.264 hardware-decode tests pass, but Qt WebEngine still uses software decoding. |
+| Plasma Camera video | Partial | Direct RAW and processed libcamera capture works at the expected rate. Only the Plasma Camera/Qt Multimedia recording path was slow: the tested file averaged about `4.12 fps`, had timestamp defects and no audio. |
 | Angelfish | Working with workaround | Stable with GPU rasterization and WebGL disabled; GPU composition and Canvas remain enabled. |
 | Auto-rotation | Working | Physically verified. |
 | Vibration | Working | Physically verified. |

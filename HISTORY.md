@@ -3,6 +3,19 @@
 This chronology lists changes and investigations verified on the physical
 handset. Reproduction details are linked where available.
 
+## 2026-09-05 — OV12A10 one-shot autofocus
+
+- Added standard libcamera Auto/Trigger/State controls for the Simple pipeline,
+  a CPU SoftISP focus metric and a bounded two-stage contrast search.
+- Updated Plasma Camera to trigger exactly one scan for each rear-camera
+  session while leaving the front camera unchanged.
+- Fixed two teardown races found through rapid rear-to-front switching: late
+  lens callbacks and malformed delayed sensor controls.
+- Verified repeatable focus, rear/front switching, saved photos, normal reboot,
+  no new coredump, lens parking and full camera-device runtime suspend.
+- Retained Plasma Camera's slow, timestamp-imperfect, no-audio encoded-video
+  result as a separate application limitation.
+
 ## 2026-09-04 — Angelfish stability and Venus investigation
 
 - Replaced the all-software `--disable-gpu` workaround with
