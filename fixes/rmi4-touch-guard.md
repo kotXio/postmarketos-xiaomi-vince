@@ -1,6 +1,7 @@
 # RMI4 failed-suspend touch guard
 
-Status: guard verified and installed; complete suspend/resume fix unresolved.
+This earlier safety guard is retained in the cumulative kernel. Working
+suspend/resume is covered by the [later update](suspend-resume.md).
 
 ## Problem
 
@@ -21,7 +22,7 @@ project-authored rather than copied from another patch.
 
 ## Limitations
 
-The guard does not eliminate the underlying intermittent E700 I2C NACK, repair
-an initial probe failure or make full suspend reliable. The implemented safety
-change is
+The guard alone did not fix complete suspend/resume or an initial probe
+failure. The later update adds reset-aware touch recovery and fixes the
+automatic reboot during resume. The original safety change is
 [`0007-rmi4-suspend-error-guard.patch`](../patches/kernel/0007-rmi4-suspend-error-guard.patch).

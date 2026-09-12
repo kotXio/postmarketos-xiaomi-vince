@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sat, 12 Sep 2026 09:00:00 +0000
+Subject: [PATCH 2/2] power: supply: qcom-smbchg: apply current role on
+ acquisition
+
+Report first role-switch acquisition, compute the physical cable role
+before writing it and avoid an unnecessary initial NONE transition.
+Disconnected ports still receive NONE; device and host detection remain.
+
+Signed-off-by: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+---
+ drivers/power/supply/qcom-smbchg.c | 13 +++++++++----
+ 1 file changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/power/supply/qcom-smbchg.c b/drivers/power/supply/qcom-smbchg.c
+index 8ab06f218789035393f5065ef49c18fbd122219a..ae5b98aa36ad3eea960b3e25542590cfdeebdd08 100644
+--- a/drivers/power/supply/qcom-smbchg.c
++++ b/drivers/power/supply/qcom-smbchg.c
+@@ -875,8 +875,11 @@ static const unsigned int smbchg_extcon_cable[] = {
+ 	EXTCON_CHG_USB_DCP, EXTCON_CHG_USB_CDP, EXTCON_NONE,
+ };
+ 
+-static bool smbchg_check_role_switch(struct smbchg_chip *chip, bool otg_present)
++static bool smbchg_check_role_switch(struct smbchg_chip *chip, bool otg_present,
++				     bool *role_sw_acquired)
+ {
++	*role_sw_acquired = false;
++
+ 	if (chip->role_sw)
+ 		return true;
+ 
+@@ -887,7 +890,7 @@ static bool smbchg_check_role_switch(struct smbchg_chip *chip, bool otg_present)
+ 
+ 	chip->role_sw = usb_role_switch_get(chip->dev);
+ 	if (!IS_ERR_OR_NULL(chip->role_sw)) {
+-		usb_role_switch_set_role(chip->role_sw, USB_ROLE_NONE);
++		*role_sw_acquired = true;
+ 		return true;
+ 	}
+ 
+@@ -907,7 +910,9 @@ static void smbchg_detect_work(struct work_struct *work)
+ 	bool otg_present = smbchg_otg_is_present(chip);
+ 	enum power_supply_usb_type usb_type;
+ 	enum usb_role usb_role = USB_ROLE_NONE;
+-	bool has_role_sw = smbchg_check_role_switch(chip, otg_present);
++	bool role_sw_acquired;
++	bool has_role_sw = smbchg_check_role_switch(chip, otg_present,
++					       &role_sw_acquired);
+ 	int ret;
+ 
+ 	dev_dbg(chip->dev, "USB %spresent\n", usb_present ? "" : "not ");
+@@ -956,7 +961,7 @@ static void smbchg_detect_work(struct work_struct *work)
+ 		usb_role = USB_ROLE_DEVICE;
+ 	}
+ 
+-	if (usb_role != chip->last_role) {
++	if (role_sw_acquired || usb_role != chip->last_role) {
+ 		usb_role_switch_set_role(chip->role_sw, usb_role);
+ 		chip->last_role = usb_role;
+ 	}

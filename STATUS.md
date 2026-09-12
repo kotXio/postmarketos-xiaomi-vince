@@ -1,10 +1,10 @@
 # Device status
 
-Last updated: 2026-09-05
+Last updated: 2026-09-12
 
 Test device: Xiaomi Redmi 5 Plus (`vince`), `aarch64`, postmarketOS `v26.06`,
 Plasma Mobile, Linux `7.0.9-msm8953`, cumulative kernel package
-`7.0.9_p20260905164637-r7`.
+`7.0.9_p20260912095627-r13`.
 
 This table reports observations from one physical handset. It is not a promise
 that the same package will work on another release or package baseline.
@@ -13,8 +13,8 @@ that the same package will work on another release or package baseline.
 | --- | --- | --- |
 | Boot and Plasma Mobile | Working | Normal persistent boot verified repeatedly. |
 | Display and GPU | Working | Adreno 506 uses Mesa Freedreno hardware rendering. |
-| Touch | Partial | Works normally and is protected from one failed-suspend path; full suspend reliability remains unresolved. |
-| Wi-Fi | Working | Used for SSH and normal browsing. |
+| Touch | Working | Works normally and after waking from suspend. |
+| Wi-Fi | Working | Normal browsing works; reconnection after suspend can take tens of seconds. |
 | Bluetooth | Working | Physical device connection verified. |
 | Main TAS2557 speaker | Working | Physically verified at conservative `-28 dB` hardware gain. |
 | Earpiece | Working | Physically verified. |
@@ -30,7 +30,7 @@ that the same package will work on another release or package baseline.
 | Vibration | Working | Physically verified. |
 | microSD | Working | Mounting and file reading were physically verified. |
 | Hall sensor | Unverified | Linux exposes `SW_LID`, but a physical state transition has not been verified. |
-| Suspend/resume | Not working reliably | Intermittent RMI4/I2C failures remain unresolved; the safety guard prevents one failed-suspend path from disabling touch. |
+| Suspend/resume | Working | Suspend-to-idle and power-button wake work normally. Overnight testing passed with good battery behaviour. |
 | IR transmitter | Not enabled | Xiaomi specifications confirm the emitter; exact PWM/GPIO wiring for Linux is unresolved. |
 | Fingerprint | Not working | Not enabled. |
 | Proximity sensor | Not working | Not enabled. |

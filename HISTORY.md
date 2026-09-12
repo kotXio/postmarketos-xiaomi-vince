@@ -3,6 +3,18 @@
 This chronology lists changes and investigations verified on the physical
 handset. Reproduction details are linked where available.
 
+## 2026-09-12 — Suspend/resume
+
+Finally, after nearly two weeks of trying, failing, and a little crying,
+suspend/resume works!
+
+- Fixed the automatic reboot during resume and the touchscreen recovery path.
+- The phone now sleeps and wakes with the power button, with the display and
+  touch working normally.
+- Overnight testing passed with normal battery behaviour.
+- The cumulative `r13` kernel keeps the existing audio, camera, autofocus and
+  torch fixes. See the [suspend/resume guide](fixes/suspend-resume.md).
+
 ## 2026-09-05 — Angelfish hardware video through Venus
 
 - Added hardware video decoding to Angelfish through Qualcomm Venus using the
@@ -61,8 +73,8 @@ handset. Reproduction details are linked where available.
 - Added and temporarily tested a safety guard that preserves IRQ and regulator
   state when device suspend fails.
 - Installed the tested guard persistently and verified it across normal boots.
-- Continued diagnostics showed that the underlying intermittent I2C NACK and
-  full suspend/resume failure remain unresolved.
+- This was the first protective fix; the remaining suspend/resume problems
+  were addressed in the [September 12 update](fixes/suspend-resume.md).
 
 ## 2026-08-29 — postmarketOS baseline and TAS2557 audio
 

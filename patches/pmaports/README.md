@@ -4,11 +4,9 @@ Target: [`postmarketOS/pmaports`](https://gitlab.postmarketos.org/postmarketOS/p
 branch `v26.06`, base commit
 `2b7f90ea7c2ae4d42ae187dc0b528dc163767b04`.
 
-Apply the files in lexical order. Use `git apply --unidiff-zero` for plain
-diffs `0001`-`0004`, then commit that group before applying mail-formatted
-patches `0005`-`0007` with `git am`. Apply plain diffs `0008`-`0009` with
-`git apply`, then apply plain diff `0010` with `git apply`.
-The patch order mirrors the tested cumulative packages.
+Apply files `0001`-`0011` in lexical order with `git apply --unidiff-zero`.
+The order mirrors the cumulative packages; see the
+[build instructions](../BUILDING.md).
 
 | Patch | Purpose |
 | --- | --- |
@@ -22,9 +20,11 @@ The patch order mirrors the tested cumulative packages.
 | `0008` | Package the handset-tested autofocus kernel as `pkgrel=4`. |
 | `0009` | Update the OV12A10 data aport for the exact patched IPA and AF policy. |
 | `0010` | Package the cumulative PMI8950 torch kernel as `pkgrel=7` with built-in multicolor LED support. |
+| `0011` | Package the cumulative suspend/resume kernel as `pkgrel=13` and remove the forced `PM_DEBUG` setting. |
 
-`0002` is build-parity configuration, not part of the RMI4 diagnosis and not a
-device fix by itself. The same package sources are also available as standalone
+`0002` preserves the earlier build configuration; `0011` removes that debug
+setting for the final suspend/resume kernel. It is not a device fix by itself.
+The same package sources are also available as standalone
 directories under [`packages/`](../../packages/).
 
 `0009` depends on the separately built Vince libcamera/IPA `99991.7.1-r3`
@@ -33,3 +33,7 @@ packages. Its `242..726` interval is specific to the test handset.
 `0010` is the incremental kernel-only update for the exact published autofocus
 baseline. It does not change the libcamera, Plasma Camera, IPA, UCM or private
 firmware packages.
+
+`0011` is a kernel-only update over that `r7` source. Apply it with kernel
+patches `0015` and `0016`; it needs no additional sleep service or power-policy
+configuration.

@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sat, 12 Sep 2026 09:00:00 +0000
+Subject: [PATCH] linux-postmarketos-qcom-msm8953: package Vince suspend
+ fix
+
+Use kernel revision r13 and remove the forced diagnostic PM_DEBUG setting.
+All other cumulative r7 device recipes remain unchanged.
+
+Signed-off-by: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+---
+ device/community/linux-postmarketos-qcom-msm8953/APKBUILD | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+index c4e98c1f1e5f1e283dc5ce776877fe8f9ab2847f..2365e951abe6e1dbb8492f818c4a65a9ba66b0ff 100644
+--- a/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
++++ b/device/community/linux-postmarketos-qcom-msm8953/APKBUILD
+@@ -3,7 +3,7 @@ maintainer="Barnabas Czeman <barnabas.czeman@postmarketos.org>"
+ _flavor="postmarketos-qcom-msm8953"
+ pkgname=linux-$_flavor
+ pkgver=7.0.9
+-pkgrel=7
++pkgrel=13
+ pkgdesc="Close to mainline linux kernel for Qualcomm Snapdragon MSM8953"
+ arch="aarch64"
+ _carch="arm64"
+@@ -39,7 +39,6 @@ prepare() {
+ 	default_prepare
+ 	cp "$srcdir/config-$_flavor.$arch" .config
+ 	scripts/config --file .config -e SND_SOC_TAS2557
+-	scripts/config --file .config -e PM_DEBUG
+ }
+ 
+ build() {

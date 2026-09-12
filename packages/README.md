@@ -32,6 +32,7 @@ are released in stages:
 2. Install [`v2026.09.04`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.04).
 3. Install [`v2026.09.05-autofocus`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.05-autofocus).
 4. Install [`v2026.09.05-torch`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.05-torch).
+5. Install [`v2026.09.12-suspend`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.12-suspend).
 
 The WebEngine update is separate from that kernel sequence. It requires the
 official Qt WebEngine `6.11.1-r3` package as its starting version and was tested
@@ -169,6 +170,19 @@ For rollback, download the `r4` kernel APK and `SHA256SUMS` from the public
 autofocus Release. Verify the checksum, simulate the one-package downgrade,
 install it and reboot. Photo flash and V4L2/sensor strobe integration are
 deliberately deferred.
+
+## Suspend/resume kernel update
+
+`linux-postmarketos-qcom-msm8953-7.0.9_p20260912095627-r13.apk` replaces the
+public `r7` torch kernel on `vince`, `aarch64`, postmarketOS `v26.06`, Linux
+`7.0.9-msm8953`. It restores working suspend-to-idle and Power-button wake
+while keeping the earlier hardware fixes. Overnight testing passed with
+normal battery behaviour.
+
+This update changes only the kernel package. Keep the existing device, UCM,
+firmware, libcamera/IPA, tuning and Plasma Camera packages. Installation,
+checksums and the public `r7` fallback are documented in the
+[release notes](../releases/v2026.09.12-suspend.md).
 
 ## Experimental WebEngine hardware-video release
 

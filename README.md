@@ -32,8 +32,8 @@ the work safely.
   Camera, including rapid-switch teardown guards.
 - PMI8950 dual-colour rear torch with four hardware-backed levels, separate
   cool/warm intensity and a tested `50 mA` per-channel cap.
-- RMI4 failed-suspend safety guard. This protects touch after one known suspend
-  error path; it is not a complete suspend/resume fix.
+- Suspend-to-idle and power-button wake with working display and touch;
+  overnight testing also passed with normal battery behaviour.
 - Stable Angelfish launcher workaround that keeps GPU composition and Canvas
   while disabling the two unstable Chromium paths.
 - Hardware video decoding in normal Angelfish through Qualcomm Venus, using a
@@ -44,8 +44,7 @@ the work safely.
 - Long/fullscreen Angelfish hardware-video playback remains experimental: two
   Venus firmware errors recovered automatically during an extended test with
   no visible playback problem, but their trigger is not yet isolated.
-- Suspend/resume is not reliable, although the RMI4 guard protects touch after
-  one known failure path.
+- Wi-Fi can take tens of seconds to reconnect after waking from suspend.
 - Autofocus is one-shot at rear-camera session start; continuous AF,
   touch-to-focus and calibrated focus distance are not implemented.
 - Plasma Camera encoded video remains slow and timestamp-imperfect and has no
@@ -55,6 +54,13 @@ the work safely.
 - The Hall sensor and SIM-dependent telephony/GPS paths remain unverified.
 
 ## Releases
+
+The suspend/resume update is available as
+[`v2026.09.12-suspend`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.12-suspend).
+Its cumulative `r13` kernel keeps the previous audio, camera, autofocus and
+torch fixes. See the
+[suspend/resume release details](releases/v2026.09.12-suspend.md) for
+compatibility, installation and source patches.
 
 The base physically tested binary set is available as
 [`v2026.09.04`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.04).

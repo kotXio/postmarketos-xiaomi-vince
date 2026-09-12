@@ -71,6 +71,32 @@ and
 It is not copied from an existing patch. Later diagnostic RMI4/panel variants
 v3-v9 did not become part of the published kernel.
 
+## Suspend/resume
+
+Kernel patches `0015` and `0016` are project-authored changes to the pinned
+MSM8953 Linux fork's
+[`rmi_driver.c`](https://github.com/msm8953-mainline/linux/blob/5be94b504b80d032481b90d533ee350ee13850f2/drivers/input/rmi4/rmi_driver.c),
+[`rmi_i2c.c`](https://github.com/msm8953-mainline/linux/blob/5be94b504b80d032481b90d533ee350ee13850f2/drivers/input/rmi4/rmi_i2c.c)
+and
+[`qcom-smbchg.c`](https://github.com/msm8953-mainline/linux/blob/5be94b504b80d032481b90d533ee350ee13850f2/drivers/power/supply/qcom-smbchg.c).
+The existing
+[`rmi_f01.c`](https://github.com/msm8953-mainline/linux/blob/5be94b504b80d032481b90d533ee350ee13850f2/drivers/input/rmi4/rmi_f01.c)
+reset/configuration path is reused, not replaced.
+
+Xiaomi's matching TD4310/E7
+[`DSX core`](https://github.com/xiaomi-msm8953-devs/android_kernel_xiaomi_msm8953/blob/dcaf331bd84a5faf23b8641ff195e4833a5c47bc/drivers/input/touchscreen/td4310_e7/synaptics_dsx_core.c)
+and
+[`I2C transport`](https://github.com/xiaomi-msm8953-devs/android_kernel_xiaomi_msm8953/blob/dcaf331bd84a5faf23b8641ff195e4833a5c47bc/drivers/input/touchscreen/td4310_e7/synaptics_dsx_i2c.c)
+were behavioural references for short retries and recovery after a controller
+reset. The DSX driver was not copied or ported.
+
+The original symptom was compared with
+[`linux#167`](https://github.com/msm8953-mainline/linux/issues/167).
+Linux's [sleep-state documentation](https://docs.kernel.org/admin-guide/pm/sleep-states.html)
+and [device-PM ordering](https://docs.kernel.org/driver-api/pm/devices.html)
+guided testing. No ready-made external suspend fix was applied.
+See the [result and limitations](fixes/suspend-resume.md).
+
 ## OV12A10 rear camera
 
 No ready Linux OV12A10 driver was found or copied. Patches `0008`-`0011` are a
