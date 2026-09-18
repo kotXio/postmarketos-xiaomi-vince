@@ -14,6 +14,9 @@ a319bc9021fa35319302451fa4c98cd32dace0a065a92b46bdd00e55ccb3aac6  kernel/0013-dw
 cf426d4239d62f5991a0ff35f85938c19426e7e9cc17c34faf6f02d1674b7275  kernel/0014-pmi8950-dual-color-torch.patch
 318a0271df3b7e43ef3a8add9c033581755d6f0afe9640a8f71f80a23815d014  kernel/0015-rmi4-system-sleep-recovery.patch
 0cf9b9cc49e9f09ce74f561de7aae2afc0c3bc818e0290a801ee2704e15238d1  kernel/0016-smbchg-usb-role-acquisition.patch
+2f1d2d33390ff0447e8fb3a7cdb7a30e17816aaee0ab4cd8199043fc70c1a14f  ltr579/0001-dt-bindings-iio-light-add-liteon-ltr579.patch
+219ed0c72bdace82ba6830ef9bbc8db1873d97d16be397008317ae05f49258ee  ltr579/0002-iio-light-ltrf216a-add-ltr579-proximity.patch
+39b8704903ed2a1adb91396627d4862c94523913bfb7e168082b0e502d652358  ltr579/0003-arm64-dts-qcom-vince-identify-ltr579.patch
 60f5164e2e1ebace2014084d6014ff4dd998a6535490bee2592b04e7953e89e0  libcamera/0001-simple-raw-lens-plumbing.patch
 aab51d0dddd73988b680279e24c9b2f1659b2434d049296bd9d472c2729a99ec  libcamera/0002-software-isp-add-focus-statistics.patch
 322cd744c20bf134415bfceae62216d064e7a60b50436e3a9ab4e4e63bf56508  libcamera/0003-simple-ipa-bounded-one-shot-af.patch

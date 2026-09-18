@@ -1,0 +1,30 @@
+From f96e16a9b10a4c23e1c6d17279695a69e255ddf8 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Fri, 18 Sep 2026 19:41:03 +0300
+Subject: [PATCH 3/3] arm64: dts: qcom: vince: identify LTR579 sensor
+
+The Vince2 hardware inventory identifies the sensor at address 0x53
+as an LTR579. Select its exact compatible so the dedicated Vince2
+build exposes the proximity channel.
+
+Signed-off-by: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+---
+ arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+index fd71368ce964..b13ada3f183a 100644
+--- a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
++++ b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+@@ -95,7 +95,7 @@ magnetometer@c {
+ 		};
+ 
+ 		light-sensor@53 {
+-			compatible = "liteon,ltrf216a";
++			compatible = "liteon,ltr579";
+ 			reg = <0x53>;
+ 			vdd-supply = <&pm8953_l10>;
+ 		};
+-- 
+2.43.0
+

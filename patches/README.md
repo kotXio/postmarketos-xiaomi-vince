@@ -3,6 +3,8 @@
 The public source is split by upstream target:
 
 - [`kernel/`](kernel/README.md): Linux changes, in one cumulative order;
+- [`ltr579/`](ltr579/README.md): optional sensor-driver and Device Tree
+  changes for a separately identified LTR579 handset variant;
 - [`pmaports/`](pmaports/README.md): matching kernel-package, device and data
   package changes;
 - [`libcamera/`](libcamera/README.md): Simple-pipeline one-shot autofocus and
@@ -17,6 +19,11 @@ Apply each numbered directory in lexical order against the base recorded in
 configuration, not a claim that every patch is ready for upstream acceptance.
 Patch checksums are listed in [`SHA256SUMS`](SHA256SUMS).
 For the cumulative kernel, follow the [build instructions](BUILDING.md).
+
+The LTR579 series is not part of the generic cumulative kernel. Both tested
+optical-sensor variants report part ID `0xb1`, so its Device Tree patch must be
+used only after confirming the fitted sensor independently. See the
+[LTR579 guide](../fixes/ltr579-proximity.md).
 
 Kernel patch `0014` and pmaports patch `0010` add the cumulative PMI8950 torch
 `r7` update on top of the previously published autofocus `r4` state. They are

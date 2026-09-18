@@ -1,6 +1,6 @@
 # Device status
 
-Last updated: 2026-09-12
+Last updated: 2026-09-18
 
 Test device: Xiaomi Redmi 5 Plus (`vince`), `aarch64`, postmarketOS `v26.06`,
 Plasma Mobile, Linux `7.0.9-msm8953`, cumulative kernel package
@@ -47,11 +47,31 @@ that the same package will work on another release or package baseline.
 | IR transmitter | Not enabled | Xiaomi confirms the emitter; stock Peel IR code uses SPI6/CS0. Linux transmission is not enabled or tested. |
 | FM radio | Not enabled | Xiaomi confirms FM reception; Linux radio/audio support has not been enabled or tested. |
 | Fingerprint | Not working | Not enabled. |
-| Proximity sensor | Not working | Not enabled. |
+| Proximity sensor | Not enabled | This handset has the LTRF216A variant. The optional LTR579 work below must not be applied to it. |
 | Camera photo flash | Deferred | Continuous torch works; high-current flash and V4L2/sensor strobe integration are intentionally not implemented. |
 | Modem | Partial | Firmware loads and the SIM/operator are detected. The expired test SIM prevented network registration testing. |
 | Calls, SMS, mobile data | Unverified | A known-active SIM is needed for service tests. |
 | GNSS / GPS | Unverified | No outdoor position-fix test yet; standalone GNSS does not inherently require an active SIM. |
+
+## Second-handset LTR579 variant
+
+A second physical Redmi 5 Plus (`MEE7`, `4/64 GB`) has an LTR579 at I2C
+address `0x53`, identified from its stock Android sensor inventory. Both
+LTRF216A and LTR579 report part ID `0xb1`, so this is an explicit Device Tree
+variant rather than safe runtime auto-detection.
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| LTR579 binding | Working | The optional driver registers `ltr579` and loads automatically after a persistent reboot. |
+| Ambient light | Working | The existing illumination path remains available; the dark test returned `0.150000000 lux`. |
+| Raw proximity | Partial | Thirty temporary-boot and twenty persistent-boot far samples returned `3-4`. Physical near/cover response is not yet tested. |
+| Threshold/IRQ/wake | Not implemented | No threshold writes, IIO events, interrupt route or wake claim. Polling only. |
+| Other passive hardware | No regression observed | Display, touch, GPU, cameras, Venus, audio, motion sensors, radio/IR nodes, Wi-Fi, Bluetooth, power and storage bindings remained present. |
+
+The source, identification boundary and rollback guidance are in the
+[LTR579 guide](fixes/ltr579-proximity.md). No community APK is published yet:
+the physically tested binary contains later cumulative private work and needs
+a clean rebuild against the public series first.
 
 ## Theoretical / unverified functions
 

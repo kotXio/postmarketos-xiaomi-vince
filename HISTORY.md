@@ -3,6 +3,19 @@
 This chronology lists changes and investigations verified on the physical
 handset. Reproduction details are linked where available.
 
+## 2026-09-18 — LTR579 hardware variant
+
+- Identified an LTR579 ambient-light/proximity sensor in a second Redmi 5 Plus
+  while the first handset retains LTRF216A at the same I2C address.
+- Added a separate `liteon,ltr579` binding and a polled 11-bit raw proximity
+  channel to the existing `ltrf216a` driver.
+- Temporary and persistent boots both registered `ltr579`; fifty passive far
+  samples returned `3-4`, and the ambient-light path remained operational.
+- Physical near/cover response, thresholds, interrupt routing and wake events
+  remain open. The Device Tree change is optional because part ID `0xb1`
+  cannot distinguish LTR579 from LTRF216A.
+- See the [LTR579 variant guide](fixes/ltr579-proximity.md).
+
 ## 2026-09-12 — Suspend/resume
 
 Finally, after nearly two weeks of trying, failing, and a little crying,

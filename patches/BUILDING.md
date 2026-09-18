@@ -26,6 +26,20 @@ for patch in "$sources_dir"/patches/pmaports/*.patch; do
 done
 ```
 
+For a handset independently confirmed to contain LTR579, apply the optional
+series after the generic kernel series:
+
+```sh
+for patch in "$sources_dir"/patches/ltr579/*.patch; do
+  git -C linux-vince apply --check "$patch" || exit 1
+  git -C linux-vince apply "$patch" || exit 1
+done
+```
+
+Do not apply that optional Device Tree change to an LTRF216A handset. Use a
+unique local package version so it cannot be mistaken for the generic `r13`
+build, and test it through `lk2nd`/`fastboot boot` before installation.
+
 Use either the complete numbered series or the three new suspend patches on
 an already-patched `r7` source tree, not both. Patch purposes are listed under
 [kernel](kernel/README.md) and [pmaports](pmaports/README.md).
@@ -44,10 +58,11 @@ pmbootstrap -p "$sources_dir/pmaports-vince" -j4 --no-ccache \
   linux-postmarketos-qcom-msm8953
 ```
 
-The recipe produces revision `r13`. Rebuild timestamps and APK checksums can
-differ from the released file. Test a new build temporarily before installing
-it permanently. Proprietary TAS2557 firmware is not needed to compile the
-kernel and is not included in the source archive.
+Without the optional variant series, the recipe produces revision `r13`.
+Rebuild timestamps and APK checksums can differ from the released file. Test a
+new build temporarily before installing it permanently. Proprietary TAS2557
+firmware is not needed to compile the kernel and is not included in the source
+archive.
 
 See [source credits](../SOURCES.md) and
 [installation instructions](../releases/v2026.09.12-suspend.md).

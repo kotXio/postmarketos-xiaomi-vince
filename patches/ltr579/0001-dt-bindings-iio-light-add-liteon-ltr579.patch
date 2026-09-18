@@ -1,0 +1,54 @@
+From 6cd1a0b0411d464933418ba788d4ff48212cd645 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Fri, 18 Sep 2026 19:41:03 +0300
+Subject: [PATCH 1/3] dt-bindings: iio: light: add Lite-On LTR579
+
+Describe the LTR579 ALS and proximity variant. Accept the secondary
+supply name already used by the existing msm8953 Tissot node.
+
+Signed-off-by: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+---
+ .../devicetree/bindings/iio/light/liteon,ltrf216a.yaml   | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/iio/light/liteon,ltrf216a.yaml b/Documentation/devicetree/bindings/iio/light/liteon,ltrf216a.yaml
+index 877e955d4ebd..ae4ed82eaf84 100644
+--- a/Documentation/devicetree/bindings/iio/light/liteon,ltrf216a.yaml
++++ b/Documentation/devicetree/bindings/iio/light/liteon,ltrf216a.yaml
+@@ -4,19 +4,21 @@
+ $id: http://devicetree.org/schemas/iio/light/liteon,ltrf216a.yaml#
+ $schema: http://devicetree.org/meta-schemas/core.yaml#
+ 
+-title: LTRF216A Ambient Light Sensor
++title: Lite-On LTRF216A, LTR308 and LTR579 light sensors
+ 
+ maintainers:
+   - Shreeya Patel <shreeya.patel@collabora.com>
+ 
+ description:
+-  Ambient light sensing with an i2c interface.
++  Ambient light sensing with an I2C interface. The LTR579 also contains a
++  proximity sensor with an integrated infrared emitter.
+ 
+ properties:
+   compatible:
+     enum:
+       - liteon,ltr308
+       - liteon,ltrf216a
++      - liteon,ltr579
+ 
+   reg:
+     maxItems: 1
+@@ -27,6 +29,9 @@ properties:
+   vdd-supply:
+     description: Regulator that provides power to the sensor.
+ 
++  vid-supply:
++    description: Secondary I/O supply used by boards with an LTR579.
++
+ required:
+   - compatible
+   - reg
+-- 
+2.43.0
+

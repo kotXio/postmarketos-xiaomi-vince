@@ -71,6 +71,31 @@ and
 It is not copied from an existing patch. Later diagnostic RMI4/panel variants
 v3-v9 did not become part of the published kernel.
 
+## LTR579 sensor variant
+
+The optional LTR579 series extends the pinned Linux fork's existing
+[`ltrf216a.c`](https://github.com/msm8953-mainline/linux/blob/5be94b504b80d032481b90d533ee350ee13850f2/drivers/iio/light/ltrf216a.c)
+driver and
+[`liteon,ltrf216a.yaml`](https://github.com/msm8953-mainline/linux/blob/5be94b504b80d032481b90d533ee350ee13850f2/Documentation/devicetree/bindings/iio/light/liteon,ltrf216a.yaml)
+binding. The project-authored changes preserve the existing LTR308/LTRF216A
+paths and add an explicitly selected LTR579 variant.
+
+The sensor identity comes from the second handset's retained stock Android
+sensor inventory. Raw stock dumps and per-handset calibration are not
+published. Lite-On's official
+[`2017 Optical Sensor Selection Guide`](https://optoelectronics.liteon.com/upload/media/service/Publications/2017OpticalSensor/2017OpticalSensor.pdf)
+independently describes LTR-579ALS as a combined digital light sensor,
+proximity sensor and IR LED with up to 20-bit ALS and 11-bit proximity ADCs.
+
+The register-family comparison used the pinned `ltrf216a` driver and Linux's
+separate
+[`ltr501.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/iio/light/ltr501.c)
+driver. The latter's `0x80`-family layout is not used by this implementation.
+No Android sensor-HAL code, proprietary firmware, calibration data or vendor
+driver was copied. The Device Tree selection is based on the physical handset
+inventory; the two project eMMC models are not presented as a universal way
+to identify the sensor.
+
 ## Suspend/resume
 
 Kernel patches `0015` and `0016` are project-authored changes to the pinned

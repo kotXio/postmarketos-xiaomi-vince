@@ -34,6 +34,8 @@ the work safely.
   cool/warm intensity and a tested `50 mA` per-channel cap.
 - Suspend-to-idle and power-button wake with working display and touch;
   overnight testing also passed with normal battery behaviour.
+- LTR579 ambient light plus a polled raw proximity channel on a separately
+  identified second handset; automatic binding and passive far readings pass.
 - Stable Angelfish launcher workaround that keeps GPU composition and Canvas
   while disabling the two unstable Chromium paths.
 - Hardware video decoding in normal Angelfish through Qualcomm Venus, using a
@@ -52,6 +54,8 @@ the work safely.
 - High-current photo flash and V4L2/sensor strobe integration are deliberately
   deferred; the continuous rear torch works.
 - The Hall sensor and SIM-dependent telephony/GPS paths remain unverified.
+- LTR579 physical near/cover response, thresholds, interrupts and wake events
+  remain unverified on the second hardware variant.
 
 ## Releases
 
