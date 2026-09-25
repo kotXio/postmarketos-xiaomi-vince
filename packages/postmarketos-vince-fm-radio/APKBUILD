@@ -1,0 +1,66 @@
+# Contributor: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+# Maintainer: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+pkgname=postmarketos-vince-fm-radio
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Lightweight native FM radio controller for Xiaomi Redmi 5 Plus"
+url="https://github.com/kotXio/postmarketos-xiaomi-vince"
+arch="aarch64"
+license="GPL-2.0-only"
+depends="alsa-utils gstreamer gst-plugins-base pulseaudio-utils qmlkonsole v4l-utils"
+makedepends="build-base linux-headers"
+
+_fmver=2.0.8
+source="
+	fmtools-$_fmver.tar.gz::https://benpfaff.org/fmtools/fmtools-$_fmver.tar.gz
+	0001-vince-fast-binary-service-scan.patch
+	vince-fm-radio
+	tests/test-station-merge.sh
+	vince-fm-radio-headphones.desktop
+	vince-fm-radio-speaker.desktop
+	"
+builddir="$srcdir/fmtools-$_fmver"
+
+build() {
+	cc $CPPFLAGS $CFLAGS -DVERSION=\"$_fmver\" \
+		-o fm fm.c fmlib.c $LDFLAGS -lm
+	cc $CPPFLAGS $CFLAGS -DVERSION=\"$_fmver\" \
+		-o fmscan fmscan.c fmlib.c $LDFLAGS -lm
+}
+
+check() {
+	./fm -q -d "test 100 0" 90.4
+	./fmscan -q -d "test 100 0" -s 89.5 -e 90.5 -i 0.1 -t 50 \
+		>scan-test.txt
+	grep -q '^89.60: ' scan-test.txt
+	grep -q '^90.40: ' scan-test.txt
+	grep -q '^90.50: ' scan-test.txt
+	sh -n "$srcdir/vince-fm-radio"
+	sh "$srcdir/test-station-merge.sh" "$srcdir/vince-fm-radio"
+}
+
+package() {
+	install -Dm755 fm \
+		"$pkgdir/usr/libexec/vince-fm-radio/fm"
+	install -Dm755 fmscan \
+		"$pkgdir/usr/libexec/vince-fm-radio/fmscan"
+	install -Dm755 "$srcdir/vince-fm-radio" \
+		"$pkgdir/usr/bin/vince-fm-radio"
+
+	install -Dm644 "$srcdir/vince-fm-radio-headphones.desktop" \
+		"$pkgdir/usr/share/applications/vince-fm-radio-headphones.desktop"
+	install -Dm644 "$srcdir/vince-fm-radio-speaker.desktop" \
+		"$pkgdir/usr/share/applications/vince-fm-radio-speaker.desktop"
+
+	install -Dm644 COPYING \
+		"$pkgdir/usr/share/licenses/$pkgname/COPYING"
+}
+
+sha512sums="
+317b6fe47f6625b9d44d9a2b23be239c73722e40eaaff20ecfc7492375a0d3923fad93f138b732c5a39e6f27826f287046ba1943ba08b11f0bbf96b22cd68f0a  fmtools-2.0.8.tar.gz
+3ad182ff450b77e58eebaa9f23a1b41fc2bda7444f56038dca71847aa2e0f82d9d455d6da292313c42e3ed91db026d281ba7f74df842d8a7a25044b2408b83a0  0001-vince-fast-binary-service-scan.patch
+b359472952316cd0280f722c690db28788208fefda493b4c18283e132f7546f6ac8bca6b33f207f7106902692aff508eb1b86dcdaf0db5eac7eb1cc496e9059e  vince-fm-radio
+16eaa5b0800a8f01c74a51e23e306adc40009d893449d32f060765d01fa81e29ad2288038fa34c6588536195f3dbceef75703d147983a05a3ffd482cfb3fa7b1  test-station-merge.sh
+30be052ce13a57a03ff5458e49eec8bdd1c7878d93d790dbc16057f8d5076f636ded87e1e7d5f265ad4815de1a05c0c3b38f1940f5e0eb7dbe509f585ba5308f  vince-fm-radio-headphones.desktop
+063fed08bc68232db3bd6c1bf10c66c9fe2b54e3995bb6f9f8d1a6d66de7c3b3fc9d67bbd55d37ace1ead60f6911f95898581e64668541c2ecc5fc1e13677653  vince-fm-radio-speaker.desktop
+"

@@ -35,8 +35,8 @@ the work safely.
 - Standard Linux control of the front selfie light through the binary
   `white:torch-1` LED.
 - Built-in infrared transmission through rc-core and fixed-rate SPI sampling.
-- Native FM tuning, seeking and stereo audio through wired headphones or the
-  TAS2557 speaker.
+- Native FM radio with full-band scanning, saved stations and stereo audio
+  through wired headphones or the TAS2557 speaker.
 - Suspend-to-idle and power-button wake with working display and touch;
   overnight use showed normal battery behaviour.
 - LTR579 ambient light plus a polled raw proximity channel on a separately
@@ -61,8 +61,9 @@ the work safely.
   deferred; the continuous rear torch works.
 - Infrared emission works, but compatibility with real appliances has not yet
   been checked.
-- FM receiver control and audio routing are separate; qv4l2 is an engineering
-  panel rather than a complete radio player.
+- Wired headphones are required as the FM antenna. RDS is unavailable and the
+  current driver reports service detection rather than calibrated signal
+  strength.
 - SIM-dependent telephony paths and an outdoor GNSS fix remain untested.
 - LTR579 physical near/cover response, thresholds, interrupts and wake events
   have not yet been checked on the second hardware variant.
@@ -72,7 +73,9 @@ the work safely.
 The cumulative `r16` hardware update is available as
 [`v2026.09.25-r16`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.25-r16).
 It adds the front selfie light, rc-core infrared transmission and native V4L2
-FM radio while keeping the previously published hardware support. See the
+FM radio while keeping the previously published hardware support. The optional
+FM Radio package adds full-band scanning, saved stations and Plasma launchers.
+See the
 [`r16` release details](releases/v2026.09.25-r16.md) and
 [exact kernel source recipe](packages/linux-postmarketos-qcom-msm8953-r16/README.md).
 

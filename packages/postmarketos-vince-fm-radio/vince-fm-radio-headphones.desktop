@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Desktop Entry]
+Type=Application
+Name=FM Radio (Headphones)
+Comment=Scan and listen to FM radio through wired headphones
+Exec=qmlkonsole -e "vince-fm-radio headphones"
+Icon=audio-radio-symbolic
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupNotify=true
+X-KDE-FormFactor=desktop;tablet;handset;

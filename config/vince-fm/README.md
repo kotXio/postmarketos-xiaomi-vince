@@ -13,5 +13,11 @@ speaker. qv4l2 controls reception; the FM UCM profile provides the separate
 `FM (FM, Speaker)` and route the FM source to the matching output; qv4l2 does
 not start an audio stream itself.
 
+The separate
+[`postmarketos-vince-fm-radio`](../../packages/postmarketos-vince-fm-radio/)
+package automates tuning and audio routing and provides dedicated headphone
+and speaker launchers. The qv4l2 launcher remains useful for lower-level
+receiver control.
+
 The files are also attached individually to the matching GitHub Release so
 users do not need this repository checkout during installation.

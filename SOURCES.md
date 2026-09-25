@@ -324,6 +324,27 @@ The released qv4l2 APK is unmodified Alpine `v4l-utils` `1.32.0-r1`, packaging
 commit `5e1b822309fb17cc2ebd46d6fbacb1763acbcdd1`. Its upstream source is
 [`v4l-utils` commit `5a666c7c`](https://github.com/gjasny/v4l-utils/tree/5a666c7ce89c00d66aa8e53c8f098a0c6c401f91).
 
+## FM radio application
+
+The lightweight application builds the `fm` and `fmscan` utilities from the
+official [fmtools project](https://benpfaff.org/fmtools/) release `2.0.8`,
+published on 2020-12-13. The downloaded archive is
+`https://benpfaff.org/fmtools/fmtools-2.0.8.tar.gz`, SHA-256
+`b1314aad7233ca3fb7cf3b0f26d7ca8f1f23ab4e864df9daccaee1f83a205821`.
+The reviewed upstream repository snapshot is
+[`3d9f5b5b15d7de952a03ff44784ce0e64ef16c21`](https://repo.or.cz/fmtools.git/commit/3d9f5b5b15d7de952a03ff44784ce0e64ef16c21).
+
+fmtools is maintained by Ben Pfaff, was originally written by Russell Kroll
+and is licensed under GPL-2.0-or-later. The only upstream-source modification
+is the published `0001-vince-fast-binary-service-scan.patch`, which adapts
+scan timing and mute handling to the Vince driver's binary service indication.
+
+The `vince-fm-radio` controller, Plasma launchers, package recipe and regression
+test are by Kostiantyn Andriiuk <konstantin@andriyuk.com> and licensed under
+GPL-2.0-only. The combined binary package is distributed under GPL-2.0-only.
+The evaluated `ncradio` project is not included or used because the reviewed
+revision did not provide an explicit licence grant.
+
 ## Angelfish and hardware video
 
 The Angelfish launcher workaround is project-authored from controlled A/B

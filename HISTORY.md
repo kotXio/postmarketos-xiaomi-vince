@@ -23,8 +23,10 @@ handset. Reproduction details are linked where available.
 - Added infrared transmission through Linux rc-core using fixed-rate SPI
   sampling. Compatibility with real appliances still needs to be checked.
 - Added native V4L2 FM radio with tuning, seeking and stereo audio through
-  wired headphones or the TAS2557 speaker. qv4l2 handles tuning, while UCM
-  `r3` provides the audio routes.
+  wired headphones or the TAS2557 speaker. UCM `r3` provides the audio routes.
+- Added a lightweight FM Radio application with full-band scanning, saved
+  stations, volume and mute controls, and separate Plasma launchers for both
+  outputs. The first scan found 19 local station candidates.
 - Combined these additions with the existing hardware fixes in cumulative
   kernel `r16`.
 - Source and reproduction details are in the

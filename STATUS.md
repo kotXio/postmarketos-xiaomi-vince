@@ -47,7 +47,7 @@ that the same package will work on another release or package baseline.
 | Hall sensor | Working | A physical magnet sweep produced repeatable `SW_LID` open/close transitions. Flip-cover policy and the exact chip are untested. |
 | Suspend/resume | Working | The phone enters suspend-to-idle and wakes with the power button; overnight use showed normal battery behaviour. |
 | IR transmitter | Working with limitation | Transmission works through rc-core and fixed-rate SPI sampling. Compatibility with real appliances and electrical characteristics remain unknown. |
-| FM radio | Working with limitation | Tuning, seeking and stereo audio work through wired headphones or the TAS2557 speaker. Wired headphones serve as the antenna; RDS and long-duration reception remain untested. |
+| FM radio | Working with limitation | The lightweight FM Radio application provides full-band scanning, saved stations, mute/volume control and stereo audio through headphones or the TAS2557 speaker. Headphones serve as the antenna; RDS and long-duration reception remain untested. |
 | Fingerprint | Not working | Not enabled. |
 | Proximity sensor | Not enabled | This handset has the LTRF216A variant. The optional LTR579 work below must not be applied to it. |
 | Camera photo flash | Deferred | Continuous torch works; high-current flash and V4L2/sensor strobe integration are intentionally not implemented. |

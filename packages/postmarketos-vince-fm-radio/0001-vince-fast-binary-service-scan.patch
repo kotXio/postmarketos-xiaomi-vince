@@ -1,0 +1,47 @@
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Tue, 15 Sep 2026 12:05:00 +0300
+Subject: [PATCH] fmscan: add fast scan timing for Vince service indication
+
+The Xiaomi Vince driver exposes a stable binary service indication (zero or
+0xffff), not an analogue RSSI value. Use a short settle interval and three
+samples so a 100 kHz EU-band scan completes in roughly 45 seconds. Explicitly
+unmute during the silent scan and mute before closing the final radio handle.
+
+This is a device integration patch, not a generic fmtools default proposal.
+---
+ fmscan.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/fmscan.c b/fmscan.c
+index 699038a..166f939 100644
+--- a/fmscan.c
++++ b/fmscan.c
+@@ -28,9 +28,9 @@
+ 
+ #include "fmlib.h"
+ 
+-#define TRIES		25		/* get 25 samples                 */
+-#define LOCKTIME	400000		/* wait 400ms for card to lock on */
+-#define SAMPLEDELAY	15000		/* wait 15ms between samples      */
++#define TRIES		3		/* Vince reports binary service   */
++#define LOCKTIME	180000		/* allow firmware tune to settle  */
++#define SAMPLEDELAY	10000		/* reject a transient indication  */
+ 
+ static void
+ usage(void)
+@@ -111,4 +111,5 @@ int main(int argc, char **argv)
+         tuner_open(&tuner, device, index);
++        tuner_set_mute(&tuner, false);
+ 
+         if (!override) {
+                 double min = tuner_get_min_freq(&tuner) / 16000.0;
+@@ -172,6 +173,7 @@ int main(int argc, char **argv)
+                                mhz, perc * 100.0);
+ 	}
+ 
++        tuner_set_mute(&tuner, true);
+         tuner_close(&tuner);
+ 	return 0;
+ }
+-- 
+2.51.0
