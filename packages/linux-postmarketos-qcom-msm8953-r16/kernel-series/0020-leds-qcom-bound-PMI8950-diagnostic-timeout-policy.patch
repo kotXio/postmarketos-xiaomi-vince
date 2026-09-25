@@ -1,0 +1,235 @@
+From 84a04199efc89c0a1636eee6466bdd7bb6228e5a Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sat, 5 Sep 2026 14:52:46 +0300
+Subject: [PATCH 20/42] leds: qcom: bound PMI8950 diagnostic timeout policy
+
+---
+ .../bindings/leds/qcom,pmi8950-flash-led.yaml | 10 +++++
+ .../boot/dts/qcom/msm8953-xiaomi-vince.dts    |  2 +
+ drivers/leds/leds-qcom-pmi8950-torch.c        | 40 ++++++++++++++++---
+ scripts/check-pmi8950-torch.py                | 35 +++++++++++++++-
+ 4 files changed, 80 insertions(+), 7 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/leds/qcom,pmi8950-flash-led.yaml b/Documentation/devicetree/bindings/leds/qcom,pmi8950-flash-led.yaml
+index 5cd7829b64c0..81eb61f29eb3 100644
+--- a/Documentation/devicetree/bindings/leds/qcom,pmi8950-flash-led.yaml
++++ b/Documentation/devicetree/bindings/leds/qcom,pmi8950-flash-led.yaml
+@@ -25,6 +25,16 @@ properties:
+   reg:
+     maxItems: 1
+ 
++  qcom,diagnostic-timeout-ms:
++    $ref: /schemas/types.yaml#/definitions/uint32
++    description:
++      Fail-safe duration for the low-current diagnostic torch. The generic
++      default remains 500 ms; a board may opt into at most 2000 ms only after
++      completing bounded minimum-current hardware tests.
++    minimum: 500
++    maximum: 2000
++    default: 500
++
+ required:
+   - compatible
+   - reg
+diff --git a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+index 0c38b6f26898..26d65c9e0621 100644
+--- a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
++++ b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+@@ -289,6 +289,8 @@ &pm8953_l23 {
+ };
+ 
+ &pmi8950_flash_led {
++	qcom,diagnostic-timeout-ms = <2000>;
++
+ 	status = "okay";
+ };
+ 
+diff --git a/drivers/leds/leds-qcom-pmi8950-torch.c b/drivers/leds/leds-qcom-pmi8950-torch.c
+index b48eb0ff4d98..93d3fc5294b1 100644
+--- a/drivers/leds/leds-qcom-pmi8950-torch.c
++++ b/drivers/leds/leds-qcom-pmi8950-torch.c
+@@ -3,7 +3,8 @@
+  * Bounded diagnostic torch support for the legacy PMI8950 flash block.
+  *
+  * This intentionally excludes photo-flash and V4L2 integration.  The two
+- * physical channels remain separate until their warm/cool mapping is known.
++ * physical channels remain separate while their continuous-use policy is
++ * validated.
+  */
+ 
+ #include <linux/bits.h>
+@@ -87,7 +88,8 @@
+ #define PMI8950_FLASH_VPH_DROOP_3V_10US		0xe1
+ 
+ #define PMI8950_TORCH_CHANNELS			2
+-#define PMI8950_TORCH_TIMEOUT_MS		500
++#define PMI8950_TORCH_DEFAULT_TIMEOUT_MS	500
++#define PMI8950_TORCH_MAX_TIMEOUT_MS		2000
+ #define PMI8950_TORCH_RAMP_DOWN_MIN_US		2160
+ #define PMI8950_TORCH_RAMP_DOWN_MAX_US		2161
+ 
+@@ -111,6 +113,7 @@ struct pmi8950_torch {
+ 	u8 type;
+ 	u8 subtype;
+ 	u8 latched_fault;
++	u32 timeout_ms;
+ 	bool locked_out;
+ 	bool stopping;
+ };
+@@ -367,7 +370,7 @@ static int pmi8950_torch_enable_locked(struct pmi8950_torch_channel *channel)
+ 
+ 	channel->enabled = true;
+ 	if (!schedule_delayed_work(&channel->timeout_work,
+-				   msecs_to_jiffies(PMI8950_TORCH_TIMEOUT_MS))) {
++				   msecs_to_jiffies(torch->timeout_ms))) {
+ 		ret = -EIO;
+ 		goto fail_closed;
+ 	}
+@@ -472,7 +475,7 @@ static void pmi8950_torch_timeout_work(struct work_struct *work)
+ 	else
+ 		dev_info(torch->dev,
+ 			 "channel %u forced off after %u ms\n",
+-			 channel->id, PMI8950_TORCH_TIMEOUT_MS);
++			 channel->id, torch->timeout_ms);
+ }
+ 
+ static enum led_brightness
+@@ -559,10 +562,21 @@ static ssize_t fault_status_show(struct device *dev,
+ }
+ static DEVICE_ATTR_RO(fault_status);
+ 
++static ssize_t diagnostic_timeout_ms_show(struct device *dev,
++					  struct device_attribute *attr,
++					  char *buf)
++{
++	struct pmi8950_torch *torch = dev_get_drvdata(dev);
++
++	return sysfs_emit(buf, "%u\n", torch->timeout_ms);
++}
++static DEVICE_ATTR_RO(diagnostic_timeout_ms);
++
+ static struct attribute *pmi8950_torch_attrs[] = {
+ 	&dev_attr_identity.attr,
+ 	&dev_attr_active_channels.attr,
+ 	&dev_attr_fault_status.attr,
++	&dev_attr_diagnostic_timeout_ms.attr,
+ 	NULL,
+ };
+ 
+@@ -615,6 +629,22 @@ static int pmi8950_torch_probe(struct platform_device *pdev)
+ 		return dev_err_probe(dev, -EINVAL, "invalid register base %#x\n",
+ 				     torch->base);
+ 
++	torch->timeout_ms = PMI8950_TORCH_DEFAULT_TIMEOUT_MS;
++	if (device_property_present(dev, "qcom,diagnostic-timeout-ms")) {
++		ret = device_property_read_u32(dev,
++					       "qcom,diagnostic-timeout-ms",
++					       &value);
++		if (ret)
++			return dev_err_probe(dev, ret,
++					     "invalid diagnostic timeout\n");
++		if (value < PMI8950_TORCH_DEFAULT_TIMEOUT_MS ||
++		    value > PMI8950_TORCH_MAX_TIMEOUT_MS)
++			return dev_err_probe(dev, -EINVAL,
++					     "diagnostic timeout %u ms out of range\n",
++					     value);
++		torch->timeout_ms = value;
++	}
++
+ 	for (i = 0; i < ARRAY_SIZE(torch->revision); i++) {
+ 		ret = regmap_read(torch->regmap,
+ 				  torch->base + PMI8950_FLASH_REVISION1_REG + i,
+@@ -690,7 +720,7 @@ static int pmi8950_torch_probe(struct platform_device *pdev)
+ 	dev_info(dev,
+ 		 "PMI8950 flash rev %02x.%02x.%02x.%02x, diagnostic torch limited to one channel at minimum current for %u ms\n",
+ 		 torch->revision[0], torch->revision[1], torch->revision[2],
+-		 torch->revision[3], PMI8950_TORCH_TIMEOUT_MS);
++		 torch->revision[3], torch->timeout_ms);
+ 
+ 	return 0;
+ }
+diff --git a/scripts/check-pmi8950-torch.py b/scripts/check-pmi8950-torch.py
+index 85c900fe76bd..e753f5fbef88 100755
+--- a/scripts/check-pmi8950-torch.py
++++ b/scripts/check-pmi8950-torch.py
+@@ -68,7 +68,8 @@ def ordered(label: str, source: str, needles: list[str]) -> None:
+ def check_constants(driver: str) -> None:
+     expected = {
+         "PMI8950_TORCH_CHANNELS": 2,
+-        "PMI8950_TORCH_TIMEOUT_MS": 500,
++        "PMI8950_TORCH_DEFAULT_TIMEOUT_MS": 500,
++        "PMI8950_TORCH_MAX_TIMEOUT_MS": 2000,
+         "PMI8950_FLASH_MIN_CURRENT_CODE": 0,
+         "PMI8950_FLASH_TORCH_MAX_CODE": 0x0F,
+         "PMI8950_FLASH_IDLE_MAX_CODE": 0x4F,
+@@ -98,6 +99,12 @@ def check_public_surface(driver: str) -> None:
+     brightness_get = function_body(driver, "pmi8950_torch_brightness_get")
+     require("? 1 : LED_OFF" in brightness_get,
+             "brightness_get does not match max_brightness")
++    attrs = initializer(driver, "pmi8950_torch_attrs")
++    require("dev_attr_diagnostic_timeout_ms.attr" in attrs,
++            "effective diagnostic timeout is not exposed read-only")
++    timeout_show = function_body(driver, "diagnostic_timeout_ms_show")
++    require('sysfs_emit(buf, "%u\\n", torch->timeout_ms)' in timeout_show,
++            "effective timeout attribute does not report driver policy")
+     lowered = driver.lower()
+     for forbidden in ("led_classdev_flash", "v4l2_flash", "v4l2-flash"):
+         require(forbidden not in lowered,
+@@ -126,11 +133,28 @@ def check_channel_selection(driver: str) -> None:
+     ordered("non-extendable timeout", enable,
+             ["if (channel->enabled)", "return 0;",
+              "schedule_delayed_work(&channel->timeout_work",
+-             "msecs_to_jiffies(PMI8950_TORCH_TIMEOUT_MS)"])
++             "msecs_to_jiffies(torch->timeout_ms)"])
+     require("mod_delayed_work" not in enable,
+             "enable path can extend an existing timeout")
+ 
+ 
++def check_timeout_policy(driver: str) -> None:
++    require("PMI8950_TORCH_TIMEOUT_MS" not in driver,
++            "obsolete fixed timeout constant remains")
++    probe = function_body(driver, "pmi8950_torch_probe")
++    ordered("bounded timeout property", probe,
++            ["torch->timeout_ms = PMI8950_TORCH_DEFAULT_TIMEOUT_MS;",
++             'device_property_present(dev, "qcom,diagnostic-timeout-ms")',
++             "device_property_read_u32",
++             "value < PMI8950_TORCH_DEFAULT_TIMEOUT_MS",
++             "value > PMI8950_TORCH_MAX_TIMEOUT_MS",
++             "torch->timeout_ms = value;"])
++
++    timeout = function_body(driver, "pmi8950_torch_timeout_work")
++    require("channel->id, torch->timeout_ms" in timeout,
++            "timeout log does not report the effective policy")
++
++
+ def check_enable_and_fail_closed(driver: str) -> None:
+     enable = function_body(driver, "pmi8950_torch_enable_locked")
+     ordered("enable sequence", enable,
+@@ -244,6 +268,10 @@ def check_integration(root: Path) -> None:
+     vince_flash = vince_flash[:vince_flash.find("};")]
+     require('status = "okay";' in vince_flash,
+             "Vince does not explicitly enable the flash node")
++    require("qcom,diagnostic-timeout-ms = <2000>;" in vince_flash,
++            "Vince does not opt into the reviewed 2000 ms limit")
++    require("qcom,diagnostic-timeout-ms" not in generic,
++            "generic node must retain the 500 ms driver default")
+ 
+     require("config LEDS_QCOM_PMI8950_TORCH" in kconfig,
+             "Kconfig symbol is missing")
+@@ -252,6 +280,8 @@ def check_integration(root: Path) -> None:
+     require("CONFIG_LEDS_QCOM_PMI8950_TORCH=y" in config,
+             "msm8953 config does not build the diagnostic driver")
+     for fragment in ("qcom,pmi8950-flash-led", "maxItems: 1",
++                     "qcom,diagnostic-timeout-ms:", "minimum: 500",
++                     "maximum: 2000", "default: 500",
+                      "additionalProperties: false"):
+         require(fragment in binding, f"binding lacks {fragment}")
+ 
+@@ -267,6 +297,7 @@ def main() -> int:
+         ("literal safety limits", lambda: check_constants(driver)),
+         ("diagnostic public surface", lambda: check_public_surface(driver)),
+         ("channel selection", lambda: check_channel_selection(driver)),
++        ("bounded timeout policy", lambda: check_timeout_policy(driver)),
+         ("enable and fail-closed paths",
+          lambda: check_enable_and_fail_closed(driver)),
+         ("forced-off ordering", lambda: check_force_off(driver)),

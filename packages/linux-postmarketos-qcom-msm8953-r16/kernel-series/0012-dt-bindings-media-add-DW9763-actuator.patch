@@ -1,0 +1,72 @@
+From 8b1a3186ddc39b94e358a3f87c017c498f0f7da7 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Wed, 2 Sep 2026 15:26:21 +0300
+Subject: [PATCH 12/42] dt-bindings: media: add DW9763 actuator
+
+---
+ .../bindings/media/i2c/dongwoon,dw9768.yaml   | 26 +++++++++++++++----
+ 1 file changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/media/i2c/dongwoon,dw9768.yaml b/Documentation/devicetree/bindings/media/i2c/dongwoon,dw9768.yaml
+index a0855d3b7577..583a924271e2 100644
+--- a/Documentation/devicetree/bindings/media/i2c/dongwoon,dw9768.yaml
++++ b/Documentation/devicetree/bindings/media/i2c/dongwoon,dw9768.yaml
+@@ -5,14 +5,14 @@
+ $id: http://devicetree.org/schemas/media/i2c/dongwoon,dw9768.yaml#
+ $schema: http://devicetree.org/meta-schemas/core.yaml#
+ 
+-title: Dongwoon Anatech DW9768 Voice Coil Motor (VCM) Lens
++title: Dongwoon DW9763/DW9768 and Giantec GT9769 Voice Coil Motors
+ 
+ maintainers:
+   - Dongchun Zhu <dongchun.zhu@mediatek.com>
+ 
+ description: |-
+-  The Dongwoon DW9768 is a single 10-bit digital-to-analog (DAC) converter
+-  with 100 mA output current sink capability. VCM current is controlled with
++  The Dongwoon DW9763 and DW9768 are single 10-bit digital-to-analog (DAC)
++  converters with 100 mA output current sink capability. VCM current is controlled with
+   a linear mode driver. The DAC is controlled via a 2-wire (I2C-compatible)
+   serial interface that operates at clock rates up to 1MHz. This chip
+   integrates Advanced Actuator Control (AAC) technology and is intended for
+@@ -21,6 +21,7 @@ description: |-
+ properties:
+   compatible:
+     enum:
++      - dongwoon,dw9763 # for DW9763 VCM
+       - dongwoon,dw9768 # for DW9768 VCM
+       - giantec,gt9769  # for GT9769 VCM
+ 
+@@ -35,6 +36,10 @@ properties:
+     description:
+       Definition of the regulator used as Digital core voltage supply.
+ 
++  vaf-supply:
++    description:
++      Definition of the regulator used as the actuator voltage supply.
++
+   dongwoon,aac-mode:
+     description:
+       Indication of AAC mode select.
+@@ -72,8 +77,19 @@ properties:
+ required:
+   - compatible
+   - reg
+-  - vin-supply
+-  - vdd-supply
++
++allOf:
++  - if:
++      properties:
++        compatible:
++          const: dongwoon,dw9763
++    then:
++      required:
++        - vaf-supply
++    else:
++      required:
++        - vin-supply
++        - vdd-supply
+ 
+ additionalProperties: false
+ 

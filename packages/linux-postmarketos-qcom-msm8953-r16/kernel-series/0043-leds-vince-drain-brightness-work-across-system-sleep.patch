@@ -1,0 +1,39 @@
+From df7d728639f8b0d2bf735a56550c617538991f31 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Mon, 14 Sep 2026 14:10:54 +0300
+Subject: [PATCH] leds: vince: drain brightness work across system sleep
+
+Block output first, use LED-core suspend to drain queued work, and resume with the cache off. Do not restore a pre-suspend on request.
+
+Signed-off-by: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+---
+ drivers/leds/leds-vince-front-fill.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/leds/leds-vince-front-fill.c b/drivers/leds/leds-vince-front-fill.c
+index 86ee599b9db0..a3ab7dad913d 100644
+--- a/drivers/leds/leds-vince-front-fill.c
++++ b/drivers/leds/leds-vince-front-fill.c
+@@ -103,7 +103,11 @@ static void vince_fill_quiesce(void *data)
+ 
+ static int vince_fill_suspend(struct device *dev)
+ {
+-	vince_fill_quiesce(dev_get_drvdata(dev));
++	struct vince_fill *fill = dev_get_drvdata(dev);
++
++	vince_fill_quiesce(fill);
++	/* Suppress and drain LED-core work while the output is blocked/off. */
++	led_classdev_suspend(&fill->led);
+ 	return 0;
+ }
+ 
+@@ -115,7 +119,8 @@ static int vince_fill_resume(struct device *dev)
+ 	vince_fill_off_locked(fill);
+ 	fill->blocked = false;
+ 	mutex_unlock(&fill->lock);
+-	/* Do not restore a pre-suspend on state or use LED_CORE_SUSPENDRESUME. */
++	/* The off cache prevents restoration of a pre-suspend on request. */
++	led_classdev_resume(&fill->led);
+ 	return 0;
+ }
+ static DEFINE_SIMPLE_DEV_PM_OPS(vince_fill_pm_ops, vince_fill_suspend,

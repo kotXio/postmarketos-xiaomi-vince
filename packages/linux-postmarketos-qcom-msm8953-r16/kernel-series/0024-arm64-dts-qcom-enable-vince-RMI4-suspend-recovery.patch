@@ -1,0 +1,22 @@
+From bd556d7ca8642285c8a1a4219ba0ccc9b0e82756 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sun, 6 Sep 2026 10:49:32 +0300
+Subject: [PATCH 24/42] arm64: dts: qcom: enable vince RMI4 suspend recovery
+
+---
+ arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+index fc35daa4b0c8..6c209ba8d095 100644
+--- a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
++++ b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+@@ -316,6 +316,8 @@ dai@127 {
+ };
+ 
+ &rmi4_ts {
++	syna,reset-on-system-suspend;
++
+ 	status = "disabled";
+ };
+ 

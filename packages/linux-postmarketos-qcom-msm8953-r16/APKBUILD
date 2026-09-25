@@ -1,0 +1,167 @@
+# Kernel config based on: defconfig, msm8953.config, and device configs
+maintainer="Barnabas Czeman <barnabas.czeman@postmarketos.org>"
+_flavor="postmarketos-qcom-msm8953"
+pkgname=linux-$_flavor
+_kernelver=7.0.9
+pkgver=7.0.9_p20260914105626
+pkgrel=16
+pkgdesc="Close to mainline linux kernel for Qualcomm Snapdragon MSM8953"
+arch="aarch64"
+_carch="arm64"
+url="https://github.com/msm8953-mainline/linux"
+license="GPL-2.0-only"
+options="!strip !check !tracedeps
+	pmb:cross-native
+	pmb:kconfigcheck-community
+"
+makedepends="
+	bash
+	bison
+	clang
+	findutils
+	flex
+	lld
+	llvm
+	openssl-dev
+	perl
+	postmarketos-installkernel
+	python3
+"
+
+_tag="$_kernelver-r0"
+
+source="
+	$pkgname-v$_tag.tar.gz::$url/archive/v$_tag.tar.gz
+	config-$_flavor.aarch64
+	cumulative-source.sha256
+	kernel-series/0001-FROMLIST-dt-bindings-sound-add-Texas-Instruments-TAS.patch
+	kernel-series/0002-FROMLIST-ASoC-codecs-add-TAS2557-mono-smart-amplifie.patch
+	kernel-series/0003-arm64-configs-msm8953-enable-TAS2557-amplifier.patch
+	kernel-series/0004-arm64-dts-qcom-msm8953-xiaomi-vince-add-TAS2557-spea.patch
+	kernel-series/0005-arm64-dts-qcom-vince-run-amplifier-I2C-at-400-kHz.patch
+	kernel-series/0006-arm64-dts-qcom-vince-add-TAS2557-VBAT-supply.patch
+	kernel-series/0007-Input-rmi4-preserve-active-state-after-suspend-failu.patch
+	kernel-series/0008-media-i2c-add-OV12A10-support-for-vince.patch
+	kernel-series/0009-media-i2c-refine-OV12A10-integration-for-vince.patch
+	kernel-series/0010-media-i2c-add-OV12A10-stock-modes-for-vince.patch
+	kernel-series/0011-media-i2c-cap-OV12A10-1080p-rate-on-vince.patch
+	kernel-series/0012-dt-bindings-media-add-DW9763-actuator.patch
+	kernel-series/0013-media-i2c-dw9768-add-DW9763-support.patch
+	kernel-series/0014-arm64-dts-qcom-msm8953-xiaomi-vince-add-DW9763.patch
+	kernel-series/0015-arm64-dts-qcom-msm8953-xiaomi-vince-link-DW9763.patch
+	kernel-series/0016-media-i2c-extend-Vince-DW9763-range-to-calibrated-ma.patch
+	kernel-series/0017-leds-qcom-add-bounded-PMI8950-torch-diagnostic.patch
+	kernel-series/0018-selftests-leds-verify-PMI8950-torch-safety-invariant.patch
+	kernel-series/0019-leds-qcom-include-OF-device-table-definition.patch
+	kernel-series/0020-leds-qcom-bound-PMI8950-diagnostic-timeout-policy.patch
+	kernel-series/0021-leds-qcom-finalize-PMI8950-multicolor-torch.patch
+	kernel-series/0022-dt-bindings-input-rmi4-add-system-suspend-reset-quir.patch
+	kernel-series/0023-Input-rmi4-recover-reset-controllers-after-system-su.patch
+	kernel-series/0024-arm64-dts-qcom-enable-vince-RMI4-suspend-recovery.patch
+	kernel-series/0025-Input-rmi4-keep-suspend-reset-quirk-private.patch
+	kernel-series/0026-Input-rmi4-serialize-resume-recovery-bookkeeping.patch
+	kernel-series/0027-pstore-expose-bounded-console-checkpoint-writer.patch
+	kernel-series/0028-power-supply-qcom-smbchg-apply-current-role-on-acqui.patch
+	kernel-series/0029-pstore-remove-unused-console-checkpoint-API.patch
+	kernel-series/0030-Input-rmi4-drop-experiment-specific-suspend-logging.patch
+	kernel-series/0031-leds-add-bounded-one-shot-Vince-front-fill-light-tes.patch
+	kernel-series/0032-media-rc-add-bounded-Vince-SPI-infrared-diagnostic.patch
+	kernel-series/0033-media-rc-use-fixed-SPI-sampling-for-Vince-infrared.patch
+	kernel-series/0034-ASoC-qcom-add-experimental-internal-FM-capture-for-V.patch
+	kernel-series/0035-Add-receive-only-Vince-FM-RPMSG-V4L2-bridge.patch
+	kernel-series/0036-media-radio-qcom-fm-separate-video-and-control-mutex.patch
+	kernel-series/0037-media-radio-qcom-fm-handle-extended-RX_ENABLE-comple.patch
+	kernel-series/0038-ASoC-qcom-q6asm-dai-do-not-set-stream-state-in-event.patch
+	kernel-series/0039-ASoC-qcom-q6asm-dai-close-stream-only-when-running.patch
+	kernel-series/0040-ASoC-qcom-q6asm-dai-fix-error-handling-in-prepare-an.patch
+	kernel-series/0041-media-radio-qcom-fm-align-native-V4L2-API-contracts.patch
+	kernel-series/0042-leds-vince-expose-stock-front-torch-through-LED-clas.patch
+	kernel-series/0043-leds-vince-drain-brightness-work-across-system-sleep.patch
+"
+builddir="$srcdir/linux-$_tag"
+
+prepare() {
+	default_prepare
+	cp "$srcdir/config-$_flavor.$arch" .config
+	scripts/config --file .config -e SND_SOC_TAS2557
+	sha256sum -c "$srcdir/cumulative-source.sha256"
+	test ! -e drivers/leds/leds-vince-front-fill-test.c
+	test ! -e Documentation/devicetree/bindings/leds/xiaomi,vince-front-fill-light-test.yaml
+	test ! -e Documentation/ABI/testing/sysfs-driver-vince-front-fill
+}
+
+build() {
+	unset LDFLAGS
+	sha256sum -c "$srcdir/cumulative-source.sha256"
+	make ARCH="$_carch" LLVM=1 olddefconfig
+	grep -Fx CONFIG_LEDS_VINCE_FRONT_FILL=y .config
+	grep -Fx CONFIG_RADIO_QCOM_FM=m .config
+	grep -Fx CONFIG_IR_SPI=m .config
+	grep -Fx CONFIG_SND_SOC_TAS2557=y .config
+	make ARCH="$_carch" LLVM=1 \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))-$_flavor"
+}
+
+package() {
+	mkdir -p "$pkgdir"/boot
+
+	make zinstall modules_install dtbs_install \
+		ARCH="$_carch" \
+		LLVM=1 \
+		INSTALL_PATH="$pkgdir"/boot \
+		INSTALL_MOD_PATH="$pkgdir"/usr \
+		INSTALL_MOD_STRIP=1 \
+		INSTALL_DTBS_PATH="$pkgdir/boot/dtbs"
+	rm -f "$pkgdir"/usr/lib/modules/*/build "$pkgdir"/usr/lib/modules/*/source
+
+	install -Dm644 "$builddir/include/config/kernel.release" \
+		"$pkgdir/usr/share/kernel/$_flavor/kernel.release"
+}
+sha512sums="
+660bb93c2d19efe27a0c19a795801cbbf092f19589b96a857e320345b406a887498a0ab6b0e435b3ef5c244f5c193f82c8a61876853f3a6c1cf0932632d00c5f  linux-postmarketos-qcom-msm8953-v7.0.9-r0.tar.gz
+67103365e440263cd9d474c9b9e894c59f5227ecced7773270f1be934d851976f13b7e30174caa8dcde23699d0b388893ddb876631da7abedd80425420ead170  config-postmarketos-qcom-msm8953.aarch64
+2423c2b796c0e36e9e9073b626b44554cc9c6f5bfee5b08624cc62487e5b10c24da35455c3061565a9c25f0e3d9f0c47484268fd2b993c8cd575b3bfb402bf42  cumulative-source.sha256
+b288dbf839bd4649ceda7cc6aa7b94f23071dfe0b4b08299fde6e00c63eaf9f00d3afa715d5c6f32d31343c542f676f87d0177184033bd00579b9f58608b05b7  0001-FROMLIST-dt-bindings-sound-add-Texas-Instruments-TAS.patch
+516a86f806d1d9b78604e768465e706b0eae70decdd116a472867a81072289a9101cbd755b3537ec7ca818fe5503c8f8a4a2b893ead863ea472d78e4cce88f53  0002-FROMLIST-ASoC-codecs-add-TAS2557-mono-smart-amplifie.patch
+5de2638f318c26719082511cceb2051676bfb94fc24ee349062332005415b6098a2b5958edc11d10c2ea23cde8cf574685d7bb9720695d2c512b5f51f9cfff8e  0003-arm64-configs-msm8953-enable-TAS2557-amplifier.patch
+f0c474b8b65d2372e63557b9cf14fff00a8506eb52dbd799fab9c06b53c5a20dc962959963ffba5e477f2a85560780305784c99c7b75857002d237a54fc7c879  0004-arm64-dts-qcom-msm8953-xiaomi-vince-add-TAS2557-spea.patch
+215bb78057d9b897f8ce558325569b2e4a08002e8765d1ad07525e377a1ac9e32c5fe26865e0d74bfbf3b5d80f6314ef4ab6a8b33b6931a69c61203915a4a486  0005-arm64-dts-qcom-vince-run-amplifier-I2C-at-400-kHz.patch
+987798161eab41a9d70a3e590bceaf6fbac7485622a7b50a26badbc9f48f3a7b8946c4325ecfc804867e5dbf6538981607fea51e05a354b371aeb7fb2639819a  0006-arm64-dts-qcom-vince-add-TAS2557-VBAT-supply.patch
+f0241c9d32c5730a752024aed7e37d99b79b93946e60770b027f4c38d94f7cd46fbaa00636bfb7ad296024ad570cd44b90d89a9da1e3028ab8c9b0e61186ddbc  0007-Input-rmi4-preserve-active-state-after-suspend-failu.patch
+019533dc6727f1ba2a66e978d369754c912e2ae3f117dd78157b8de634cf1bbcb6f5ebf60717084603a97f7d3828f5aa6a61386d9200c6ec764db0d76c49e2ca  0008-media-i2c-add-OV12A10-support-for-vince.patch
+7fd13e0871d07801677e4a2607761fcab718e775709d3652dcd1654624a77538ccc65d1734291083f56d2332b273d6368e2a3c514bc52b1a705eeb72892d4f11  0009-media-i2c-refine-OV12A10-integration-for-vince.patch
+007caefcd07acd4a06618d040f50236ab92a95c36397db060cfaa69b132a3233bcb1bdabac2045056b281a9e0e60b0c96b62016fdffdf3d701aba1035b870f9a  0010-media-i2c-add-OV12A10-stock-modes-for-vince.patch
+d494a37dfcde5e12441379b74207130ec09f226807b2845175566b59a616d669e6608b9bf770312a8575c522bbfb4cbd7ce78669905f718a41b4baf3b36af65a  0011-media-i2c-cap-OV12A10-1080p-rate-on-vince.patch
+706b2b5d7d7df1737983eeb35b3a83bb67db396c6c621f64542a23a79312f04c8d0ab768118a037b8d5dae8079f2fbae265a58d423bf74e0f35772aa2358f10d  0012-dt-bindings-media-add-DW9763-actuator.patch
+e899079f74a2e8263e74c8b984ba90f16e9beda2a97b3f6a91eef9bac5c9be7739e28b4176023fa0d5f3cb372f7a7bff36158859ea56810ff0f47ab6d638f532  0013-media-i2c-dw9768-add-DW9763-support.patch
+e6064f28dea4a2b6587e33272a9d69d011f9efe6204740942041a21072913cf8196305ecb79b91c8e3c59d0359ae8722b00843d288dac224d69b71e987375b12  0014-arm64-dts-qcom-msm8953-xiaomi-vince-add-DW9763.patch
+81fc534b538515d159751ffed628e1fbdae5c58f9bcd787d82c2f1695f2c52391b5f2126fb0b9926b89df2f7e945c882fb6780370c9af12e138fdf16ea36adb4  0015-arm64-dts-qcom-msm8953-xiaomi-vince-link-DW9763.patch
+f9c7e5cd09503768adf46cec9e227b930b3681b4807c340c49f67009012fadc165ac784282f5859e0a9d17db52558170c20b9377b5ba82a71d47e569ae56d65e  0016-media-i2c-extend-Vince-DW9763-range-to-calibrated-ma.patch
+57c13fcd9fa41a98ec3c29be9a98b8a77ca092a3a0059fef5d01850dd7be8fcc82d5b4bb9eb4eeceba1c64585ae019854700db7baa2ed7188060d85193db0593  0017-leds-qcom-add-bounded-PMI8950-torch-diagnostic.patch
+febd93f915038d80d2b5edcfc20a561ffacd86052561969ebaf26b7c40c3f1bcf4d492dbb4df3aee1507cc9627dbd09be9755843d7d7941525501cd54f4043ce  0018-selftests-leds-verify-PMI8950-torch-safety-invariant.patch
+923ed89ed7c33ac354f9723cd45f66d4373d891ed6d2798961520d807909380fd88854e623b2028419f25f209b4a374f831013a05c8489409849df4a0a25931b  0019-leds-qcom-include-OF-device-table-definition.patch
+0c337040575099acf03444a6bfc680b0b1f2b7a6b6f52201a2eb72735d2d827c84e2a4913fb8601d50fc6655b1167bb760d87c50eec96198630254f7bcb015a3  0020-leds-qcom-bound-PMI8950-diagnostic-timeout-policy.patch
+ae33ee63d918336bca18af2a2017f991561ca9f866ffba2c5d7da08c7dbcc4b0d255084311d827095b22f48de6bc56737f2f78c51d428aae502490612a6b64ef  0021-leds-qcom-finalize-PMI8950-multicolor-torch.patch
+6ec7926c8ae5432a59e0e2407694f08aa634b1ff0a2f2ce406411e4c7dbc88526bd776ec093e658feeafac8e55d79872c20bbff6d96a54bbb108cd819c9766ff  0022-dt-bindings-input-rmi4-add-system-suspend-reset-quir.patch
+00af50c1b8a03062e35a4d0e10a07d653cc2a114b74bd1558dc0bb8fee2f6bb1a62c3bcc6adaac53f5e324462a6b1878ab09af31eace224210b652e0c6daaa93  0023-Input-rmi4-recover-reset-controllers-after-system-su.patch
+a60da5359a5823caf83293d3fa1269ab2576d33b8d9b13e9e84f2827004446b8e48914b4acc55388c6bc7e91cbdb49c91510b31ca07bb90db073826f73863b31  0024-arm64-dts-qcom-enable-vince-RMI4-suspend-recovery.patch
+ab1fc7f939c45de8e02045b892a1c61f2da93e5779f58a3599287b1c4c8723f573b154599460835841d116c5360e9944ec6b00fa92a8497a87f96025b403850b  0025-Input-rmi4-keep-suspend-reset-quirk-private.patch
+240f085995191972cb2f9b2cd8b0ad0079a717e3fb1ac155f969582159fb53bd40f9bc1544235f31c9ac9c96cc0d1c270a4e0d3552a0d88e20aca058c6d5bd47  0026-Input-rmi4-serialize-resume-recovery-bookkeeping.patch
+dc270ea9da2c48ebecb6b11a5020f75bf967b60852876763eca328cfe8b282f8242386dda299b9148f8621d6753ee3c96b253e8c55a25309f9bf6b2020d90f7a  0027-pstore-expose-bounded-console-checkpoint-writer.patch
+3e9f58025c4aa7e6c193607e5c4f66a4db45f01d698351f545a909e401ba143a76c6b0b94bfa9be80391d2c4619ebb948e1a2ff7e7979df77f8f92b1a80301d6  0028-power-supply-qcom-smbchg-apply-current-role-on-acqui.patch
+ea5b17a4d72f342bd36ffefcf10d4fa1418126de9407a4f0237fd894abe342653ca4980c9a52c12b641efa716c308804a4c364f1ed0e4c23599768b6e8e18f4f  0029-pstore-remove-unused-console-checkpoint-API.patch
+6e2a444c0043a940b0fb8918b207bf2ad4b34aee493f021924f1948a22aa6f951217177af8ad99ef94816636aba1c2eb433c4dc034ad794efc5712030e1b53b7  0030-Input-rmi4-drop-experiment-specific-suspend-logging.patch
+6a3563418e519bce1ed8566171a8b4f4fb0f7781096f9cd536d3a0a0b1b0a7ba6afc0dfd2bee93a54bb706664b879995a95a284e6fa5cdac81c71fb895a2347c  0031-leds-add-bounded-one-shot-Vince-front-fill-light-tes.patch
+0b8650e01cd309bd10ca01e555256dd804115efc3ea89e14424ce11df779844267a1f8914c63a5226252e31d139e2a37fef5880846995ec9ae2b290913e851a9  0032-media-rc-add-bounded-Vince-SPI-infrared-diagnostic.patch
+c96f4ad8e510e12ef1c5ff37211646aae3edd22291e3f8bea781f57be161f0594d9af1f07153e8b676280f9e0eb8e60a413538f284c452a56c4038b6660af823  0033-media-rc-use-fixed-SPI-sampling-for-Vince-infrared.patch
+64e3365a9991942e2924272da1dacdc40e748d34da976917b348ec4fb2aa068eb63feac49ef6737233dfd0397b49b374b8c991a442f6eda30540240f2cff8d40  0034-ASoC-qcom-add-experimental-internal-FM-capture-for-V.patch
+3f5102f0b12faa03a7b9678cc9fdafd4a153a7531632a6239fb13ef4238e1728f77662d1d03f7c0d180e9acb7cf58dd9c3aff28f3540790b800a05f2ec642c87  0035-Add-receive-only-Vince-FM-RPMSG-V4L2-bridge.patch
+63be8d00dee56ddc6b9a9347996bf1abee9304666579a98d86110278a10931b64c529323815e3245cc3419195569e5c10ecc048fc970c7b6c39500bc831da908  0036-media-radio-qcom-fm-separate-video-and-control-mutex.patch
+db8aa31fe53a262a61f87c6e5e6209b0c8f7ed43717c66475cadb3e3fcdf226717902ac3f4d4a8b43112039c51926b85bbbf15dee4c901cf231f45549975635a  0037-media-radio-qcom-fm-handle-extended-RX_ENABLE-comple.patch
+0a48fe8ce8196ddf7debabe39f8b364c0b08a9ed8c28163c8ee7171e97ea1a0320af30e0af6432d4bede49aa00ec2df0bd266af88cb60fa627a1436885e5a946  0038-ASoC-qcom-q6asm-dai-do-not-set-stream-state-in-event.patch
+cfa5db3d42fbe470d407542a9e13d4806eb20fd3bfe228d13f9f2497b4e5afab4408294c397f433a0aff32d782dc8e68dea0addd43b567239510992f3c16334f  0039-ASoC-qcom-q6asm-dai-close-stream-only-when-running.patch
+bb803ac83feeeb32ea15d3c89eda80f5787ee264ad3b85e61abdec2eca1ed3be49d8b32db08f0c31cf54f0d378ce012012790fdc18deecd4a847c2438e13e689  0040-ASoC-qcom-q6asm-dai-fix-error-handling-in-prepare-an.patch
+0c5121c56b35b2791bd69db4f630569a365a0cc8efde46e3d5b547c6f3a01243c7168d8911d99df59a163a63164eb1fc468d524a1161bff24b0dbf94738c7562  0041-media-radio-qcom-fm-align-native-V4L2-API-contracts.patch
+c5884a18ef99a4d55bb990a1bacc0adccd161e3aa3838234679dd9da12c4df908e40d9bdc637f22ed1f51b126b16c6c53fa9009b14fdcacd1491f237ceb562ff  0042-leds-vince-expose-stock-front-torch-through-LED-clas.patch
+8eb7b68024020d5224e7444055198816c9018731f0f70993959eb73b240fa33a978c4a817cb61bdc05fbcc4872561364238b662f36b6068719c7d754657caac0  0043-leds-vince-drain-brightness-work-across-system-sleep.patch
+"

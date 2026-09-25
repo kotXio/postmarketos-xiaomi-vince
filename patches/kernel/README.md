@@ -4,7 +4,12 @@ Target: [`msm8953-mainline/linux`](https://github.com/msm8953-mainline/linux),
 branch `7.0.9/main`, base commit
 `5be94b504b80d032481b90d533ee350ee13850f2` (`v7.0.9-r0`).
 
-Apply files `0001`-`0016` in lexical order with `git apply --unidiff-zero`.
+This directory is the concise cumulative series through the public `r13`
+release. For the exact `r16` build order, configuration and APKBUILD, use
+[`packages/linux-postmarketos-qcom-msm8953-r16`](../../packages/linux-postmarketos-qcom-msm8953-r16/README.md).
+
+Apply files `0001`-`0016` in lexical order with `git apply --unidiff-zero` when
+reproducing the earlier concise series.
 That command accepts both the mail-formatted patches and compact plain diffs;
 the original authorship remains recorded in the patch files. See the
 [build instructions](../BUILDING.md) for a complete source-build example.

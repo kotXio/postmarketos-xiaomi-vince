@@ -1,0 +1,132 @@
+From 30b18e4ea52442d80b64551e4ac79fd5d2c49378 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sun, 13 Sep 2026 17:09:15 +0300
+Subject: [PATCH 37/42] media: radio: qcom-fm: handle extended RX_ENABLE
+ completion
+
+Recognize the observed status plus opaque payload success reply instead of ignoring it and timing out. Preserve status-only completions and unrelated-reply restrictions. Add real-frame, status and length regression coverage.
+
+Signed-off-by: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+---
+ drivers/media/radio/qcom-fm-native/fm-wire.h  |  8 +-
+ .../radio/qcom-fm-native/radio-qcom-fm.c      |  2 +-
+ .../qcom-fm-native/test-enable-replies.c      | 81 +++++++++++++++++++
+ 3 files changed, 89 insertions(+), 2 deletions(-)
+ create mode 100644 drivers/media/radio/qcom-fm-native/test-enable-replies.c
+
+diff --git a/drivers/media/radio/qcom-fm-native/fm-wire.h b/drivers/media/radio/qcom-fm-native/fm-wire.h
+index d4bf219e4982..e27914736666 100644
+--- a/drivers/media/radio/qcom-fm-native/fm-wire.h
++++ b/drivers/media/radio/qcom-fm-native/fm-wire.h
+@@ -103,7 +103,13 @@ static inline bool fm_event_decode(const u8 *p, size_t n, struct fm_event *e)
+ 		if (n < 6)
+ 			return false;
+ 		e->op = (u16)p[3] | (u16)p[4] << 8;
+-		if (e->op == FM_GET_CONFIG) {
++		if (e->op == FM_ENABLE) {
++			/* Vince: status + 12 opaque bytes, not a GET_CONFIG reply.
++			 * Keep status-only success/error replies compatible.
++			 */
++			if (n != 6 && (n != 18 || p[5]))
++				return false;
++		} else if (e->op == FM_GET_CONFIG) {
+ 			if (!((n == 6 && p[5]) ||
+ 			      (n == 18 && !p[5] && fm_config_valid(p + 6, 12))))
+ 				return false;
+diff --git a/drivers/media/radio/qcom-fm-native/radio-qcom-fm.c b/drivers/media/radio/qcom-fm-native/radio-qcom-fm.c
+index 34de1ebbdf64..26932ec43878 100644
+--- a/drivers/media/radio/qcom-fm-native/radio-qcom-fm.c
++++ b/drivers/media/radio/qcom-fm-native/radio-qcom-fm.c
+@@ -633,4 +633,4 @@ module_rpmsg_driver(fm_driver);
+ MODULE_AUTHOR("Kostiantyn Andriiuk <konstantin@andriyuk.com>");
+ MODULE_DESCRIPTION("Experimental Vince receive-only WCNSS FM V4L2 bridge");
+ MODULE_LICENSE("GPL");
+-MODULE_VERSION("0.2");
++MODULE_VERSION("0.3");
+diff --git a/drivers/media/radio/qcom-fm-native/test-enable-replies.c b/drivers/media/radio/qcom-fm-native/test-enable-replies.c
+new file mode 100644
+index 000000000000..861fa6c8b1ca
+--- /dev/null
++++ b/drivers/media/radio/qcom-fm-native/test-enable-replies.c
+@@ -0,0 +1,81 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Copyright (C) 2026 Kostiantyn Andriiuk */
++/* Offline protocol regression; never opens a device or transmits a command. */
++#include <assert.h>
++#include <stdio.h>
++#include <string.h>
++#include "fm-wire.h"
++
++int main(void)
++{
++	/* Actual successful Vince RX_ENABLE completion, 2026-09-13. */
++	const u8 observed[] = {
++		0x0f, 0x10, 0x01, 0x01, 0x4c, 0x00,
++		0x00, 0x00, 0x00, 0x00, 0xcc, 0x55,
++		0x01, 0x00, 0xe0, 0xa5, 0x01, 0x00
++	};
++	u8 short_reply[] = { 0x0f, 4, 1, 1, 0x4c, 0 };
++	u8 frame[258];
++	struct fm_event event;
++
++	if (!fm_event_decode(observed, sizeof(observed), &event) ||
++	    event.kind != FM_COMPLETE || event.op != FM_ENABLE ||
++	    event.status || event.count != 13) {
++		puts("FAIL: observed extended RX_ENABLE completion is ignored");
++		return 1;
++	}
++	assert(!memcmp(event.reply, observed + 5, 13));
++	/* Keep existing status-only success/error completions compatible. */
++	for (unsigned status = 0; status < 256; status++) {
++		short_reply[5] = status;
++		assert(fm_event_decode(short_reply, sizeof(short_reply), &event));
++		assert(event.kind == FM_COMPLETE && event.op == FM_ENABLE);
++		assert(event.status == status && event.count == 1);
++	}
++	/* Only the observed extended success shape is additionally accepted. */
++	for (unsigned status = 0; status < 256; status++) {
++		memcpy(frame, observed, sizeof(observed));
++		frame[5] = status;
++		if (!status) {
++			assert(fm_event_decode(frame, sizeof(observed), &event));
++			assert(event.kind == FM_COMPLETE && event.count == 13);
++		} else {
++			assert(!fm_event_decode(frame, sizeof(observed), &event));
++		}
++	}
++	/* Truncation, oversized replies and self-consistent wrong lengths. */
++	for (size_t n = 0; n < sizeof(observed); n++)
++		assert(!fm_event_decode(observed, n, &event));
++	for (size_t n = 0; n <= sizeof(frame); n++) {
++		memset(frame, 0, sizeof(frame));
++		frame[0] = 0x0f;
++		frame[1] = n >= 2 ? n - 2 : 0;
++		frame[2] = 1;
++		frame[3] = 1;
++		frame[4] = 0x4c;
++		if (n == 6 || n == sizeof(observed)) {
++			assert(fm_event_decode(frame, n, &event));
++			assert(event.kind == FM_COMPLETE && event.op == FM_ENABLE);
++			assert(event.count == n - 5);
++		} else {
++			assert(!fm_event_decode(frame, n, &event));
++		}
++	}
++	/* Do not widen long replies for DISABLE or unrelated opcodes. */
++	memcpy(frame, observed, sizeof(observed));
++	frame[3] = 2;
++	assert(fm_event_decode(frame, sizeof(observed), &event));
++	assert(event.kind == FM_IGNORE && !event.count);
++	frame[3] = 5;
++	frame[4] = 0x54;
++	assert(fm_event_decode(frame, sizeof(observed), &event));
++	assert(event.kind == FM_IGNORE && !event.count);
++	/* Trailing payload is opaque, not validated/interpreted as GET_CONFIG. */
++	memcpy(frame, observed, sizeof(observed));
++	memset(frame + 6, 0xa5, 12);
++	assert(fm_event_decode(frame, sizeof(observed), &event));
++	assert(event.kind == FM_COMPLETE && event.count == 13);
++	assert(!memcmp(event.reply, frame + 5, 13));
++	puts("PASS: observed RX_ENABLE / status / length / unrelated replies");
++	return 0;
++}

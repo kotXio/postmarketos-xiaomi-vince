@@ -1,0 +1,32 @@
+From 5fdbfb97ee34f14bdb2371fd41fb5d1b143f998e Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Wed, 2 Sep 2026 15:26:21 +0300
+Subject: [PATCH 14/42] arm64: dts: qcom: msm8953-xiaomi-vince: add DW9763
+
+---
+ arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+index de127d7a97d9..f7efd9275b8e 100644
+--- a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
++++ b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+@@ -161,6 +161,18 @@ &cci {
+ };
+ 
+ &cci_i2c0 {
++	dw9763: camera-lens@c {
++		compatible = "dongwoon,dw9763";
++		reg = <0x0c>;
++
++		vaf-supply = <&pm8953_l17>;
++		dongwoon,aac-mode = <5>;
++		dongwoon,aac-timing = <0x38>;
++		dongwoon,clock-presc = <1>;
++
++		status = "okay";
++	};
++
+ 	camera-sensor@10 { // Rear camera
+ 		compatible = "ovti,ov12a10";
+ 		reg = <0x10>;

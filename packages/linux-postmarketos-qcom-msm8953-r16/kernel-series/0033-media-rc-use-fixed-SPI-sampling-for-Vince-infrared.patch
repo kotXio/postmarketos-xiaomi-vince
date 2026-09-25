@@ -1,0 +1,221 @@
+From c7092d433b3801847d69b19a5fd90d0d9c6b1b93 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sat, 12 Sep 2026 20:32:32 +0300
+Subject: [PATCH 33/42] media: rc: use fixed SPI sampling for Vince infrared
+
+---
+ drivers/media/rc/ir-spi.c | 125 ++++++++++++++++++++++++++++----------
+ 1 file changed, 92 insertions(+), 33 deletions(-)
+
+diff --git a/drivers/media/rc/ir-spi.c b/drivers/media/rc/ir-spi.c
+index 60cea569d38c..af0d50e15ccb 100644
+--- a/drivers/media/rc/ir-spi.c
++++ b/drivers/media/rc/ir-spi.c
+@@ -10,6 +10,7 @@
+ #include <linux/err.h>
+ #include <linux/ktime.h>
+ #include <linux/math.h>
++#include <linux/minmax.h>
+ #include <linux/mod_devicetable.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+@@ -31,7 +32,9 @@
+ #define VINCE_IR_MIN_CARRIER		30000
+ #define VINCE_IR_MAX_CARRIER		60000
+ #define VINCE_IR_MAX_ATTEMPTS		75
+-#define VINCE_IR_IDLE_CYCLES		128
++#define VINCE_IR_SAMPLE_HZ		960000
++#define VINCE_IR_PREFIX_SAMPLES		960
++#define VINCE_IR_TAIL_SAMPLES		2048
+ 
+ struct ir_spi_data {
+ 	u32 freq;
+@@ -57,7 +60,7 @@ static int ir_spi_vince_validate(struct ir_spi_data *idata,
+ 				const unsigned int *buffer, unsigned int count,
+ 				u32 *duration)
+ {
+-	unsigned int i;
++	unsigned int i, previous_samples = 0;
+ 	u32 total = 0;
+ 
+ 	if (idata->failed)
+@@ -70,10 +73,12 @@ static int ir_spi_vince_validate(struct ir_spi_data *idata,
+ 		return -EINVAL;
+ 	if (idata->freq < VINCE_IR_MIN_CARRIER ||
+ 	    idata->freq > VINCE_IR_MAX_CARRIER ||
+-	    idata->freq > idata->spi->max_speed_hz / IR_SPI_BITS_PER_PULSE)
++	    idata->spi->max_speed_hz < VINCE_IR_SAMPLE_HZ)
+ 		return -EINVAL;
+ 
+ 	for (i = 0; i < count; i++) {
++		unsigned int end_samples;
++
+ 		if (!buffer[i] ||
+ 		    !DIV_ROUND_CLOSEST_ULL((u64)buffer[i] * idata->freq, 1000000))
+ 			return -EINVAL;
+@@ -82,51 +87,100 @@ static int ir_spi_vince_validate(struct ir_spi_data *idata,
+ 		if (buffer[i] > VINCE_IR_MAX_FRAME_US - total)
+ 			return -E2BIG;
+ 		total += buffer[i];
++
++		end_samples = DIV_ROUND_CLOSEST_ULL((u64)total *
++						   VINCE_IR_SAMPLE_HZ, 1000000);
++		/* Every mark must contain at least its first full carrier period. */
++		if (!(i & 1) && end_samples - previous_samples <
++		    VINCE_IR_SAMPLE_HZ / idata->freq)
++			return -EINVAL;
++		previous_samples = end_samples;
+ 	}
+ 
+ 	*duration = total;
+ 	return 0;
+ }
+ 
++/*
++ * Envelope boundaries use cumulative microseconds, rounded once to samples.
++ * Each mark starts a fresh carrier; alternating floor/ceil periods keep its
++ * accumulated carrier error below one sample. Low bits precede high bits, so
++ * a truncated last cycle cannot increase its duty. Cap each complete cycle at
++ * the old 5/16 duty; requested 30% can quantize slightly lower.
++ */
++static int ir_spi_vince_build(struct ir_spi_data *idata,
++			     const unsigned int *buffer, unsigned int count,
++			     u32 duration, u8 **payload, unsigned int *length)
++{
++	unsigned int i, offset = VINCE_IR_PREFIX_SAMPLES, previous_samples = 0;
++	unsigned int samples, bytes;
++	u32 elapsed = 0;
++	u8 *data;
++
++	samples = VINCE_IR_PREFIX_SAMPLES +
++		  DIV_ROUND_CLOSEST_ULL((u64)duration * VINCE_IR_SAMPLE_HZ,
++					1000000) + VINCE_IR_TAIL_SAMPLES;
++	bytes = DIV_ROUND_UP(samples, 8);
++	data = kcalloc(bytes, 1, GFP_KERNEL);
++	if (!data)
++		return -ENOMEM;
++
++	for (i = 0; i < count; i++) {
++		unsigned int end_samples, remaining, fraction = 0;
++
++		elapsed += buffer[i];
++		end_samples = DIV_ROUND_CLOSEST_ULL((u64)elapsed *
++						   VINCE_IR_SAMPLE_HZ, 1000000);
++		remaining = end_samples - previous_samples;
++		previous_samples = end_samples;
++		if (i & 1) {
++			offset += remaining;
++			continue;
++		}
++
++		while (remaining) {
++			unsigned int period = VINCE_IR_SAMPLE_HZ / idata->freq;
++			unsigned int high, chunk, j;
++
++			fraction += VINCE_IR_SAMPLE_HZ % idata->freq;
++			if (fraction >= idata->freq) {
++				fraction -= idata->freq;
++				period++;
++			}
++			high = min(DIV_ROUND_CLOSEST(period * 30, 100),
++				   period * 5 / 16);
++			chunk = min(remaining, period);
++			for (j = period - high; j < chunk; j++)
++				data[(offset + j) / 8] |= BIT(7 - ((offset + j) & 7));
++			offset += chunk;
++			remaining -= chunk;
++		}
++	}
++
++	*payload = data;
++	*length = bytes;
++	return 0;
++}
++
+ static int ir_spi_vince_tx(struct ir_spi_data *idata,
+ 			   const unsigned int *buffer, unsigned int count)
+ {
+ 	struct spi_transfer xfer = { };
+-	unsigned int i, j, words, offset;
+ 	u32 duration;
++	unsigned int bytes;
+ 	u8 *tx_buf;
+ 	int ret, off_ret;
+ 
+ 	ret = ir_spi_vince_validate(idata, buffer, count, &duration);
++	if (ret)
++		return ret;
++	ret = ir_spi_vince_build(idata, buffer, count, duration, &tx_buf, &bytes);
+ 	if (ret)
+ 		return ret;
+ 
+-	/* A leading 1 ms space and terminal all-zero cycles are inactive. */
+-	words = DIV_ROUND_CLOSEST(idata->freq, 1000) + VINCE_IR_IDLE_CYCLES;
+-	for (i = 0; i < count; i++)
+-		words += DIV_ROUND_CLOSEST_ULL((u64)buffer[i] * idata->freq,
+-					      1000000);
+-
+-	tx_buf = kcalloc(words, 2, GFP_KERNEL);
+-	if (!tx_buf)
+-		return -ENOMEM;
+-
+-	offset = DIV_ROUND_CLOSEST(idata->freq, 1000) * 2;
+-	for (i = 0; i < count; i++) {
+-		u16 value = (i & 1) ? 0 : idata->pulse;
+-		u32 cycles = DIV_ROUND_CLOSEST_ULL((u64)buffer[i] * idata->freq,
+-						 1000000);
+-
+-		/* Explicit byte stream, independent of CPU u16 endianness. */
+-		for (j = 0; j < cycles; j++) {
+-			tx_buf[offset++] = value >> 8;
+-			tx_buf[offset++] = value;
+-		}
+-	}
+-
+-	xfer.speed_hz = idata->freq * IR_SPI_BITS_PER_PULSE;
++	xfer.speed_hz = VINCE_IR_SAMPLE_HZ;
+ 	xfer.bits_per_word = 8;
+-	xfer.len = words * 2;
++	xfer.len = bytes;
+ 	xfer.tx_buf = tx_buf;
+ 
+ 	idata->attempts++;
+@@ -152,8 +206,8 @@ static int ir_spi_vince_tx(struct ir_spi_data *idata,
+ 			ret);
+ 	} else {
+ 		dev_info(&idata->spi->dev,
+-			 "[vince-ir] TX %u: %u us, %u Hz, inactive tail\n",
+-			 idata->attempts, duration, idata->freq);
++			 "[vince-ir] TX %u: %u us, carrier %u Hz, SPI %u Hz, inactive tail\n",
++			 idata->attempts, duration, idata->freq, VINCE_IR_SAMPLE_HZ);
+ 	}
+ 	kfree(tx_buf);
+ 
+@@ -232,8 +286,12 @@ static int ir_spi_set_tx_carrier(struct rc_dev *dev, u32 carrier)
+ 	if (!carrier)
+ 		return -EINVAL;
+ 
+-	if (carrier > idata->spi->max_speed_hz / IR_SPI_BITS_PER_PULSE)
++	if (idata->vince) {
++		if (idata->spi->max_speed_hz < VINCE_IR_SAMPLE_HZ)
++			return -EINVAL;
++	} else if (carrier > idata->spi->max_speed_hz / IR_SPI_BITS_PER_PULSE) {
+ 		return -EINVAL;
++	}
+ 
+ 	idata->freq = carrier;
+ 
+@@ -313,7 +371,7 @@ static int ir_spi_probe(struct spi_device *spi)
+ 
+ 	if (idata->vince)
+ 		dev_info(dev,
+-			 "[vince-ir] ready, no auto TX; 120 ms frame, 20 ms mark, 1 s gap, 75 attempts\n");
++			 "[vince-ir] ready, no auto TX; fixed 960000 Hz SPI, 120 ms frame, 20 ms mark, 1 s gap, 75 attempts\n");
+ 
+ 	return devm_rc_register_device(dev, idata->rc);
+ }
+@@ -345,3 +403,4 @@ module_spi_driver(ir_spi_driver);
+ MODULE_AUTHOR("Andi Shyti <andi@etezian.org>");
+ MODULE_DESCRIPTION("SPI IR LED");
+ MODULE_LICENSE("GPL v2");
++MODULE_VERSION("vince-ir-v2-fixed-960k");

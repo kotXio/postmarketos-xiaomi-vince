@@ -1,0 +1,428 @@
+From 46feefb4a3679d65f2be69f0fef5784f4d725b4f Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sat, 12 Sep 2026 15:24:51 +0300
+Subject: [PATCH 31/42] leds: add bounded one-shot Vince front fill-light test
+
+---
+ .../ABI/testing/sysfs-driver-vince-front-fill |  27 ++
+ .../xiaomi,vince-front-fill-light-test.yaml   |  50 ++++
+ .../boot/dts/qcom/msm8953-xiaomi-vince.dts    |  15 ++
+ drivers/leds/Kconfig                          |   9 +
+ drivers/leds/Makefile                         |   1 +
+ drivers/leds/leds-vince-front-fill-test.c     | 253 ++++++++++++++++++
+ 6 files changed, 355 insertions(+)
+ create mode 100644 Documentation/ABI/testing/sysfs-driver-vince-front-fill
+ create mode 100644 Documentation/devicetree/bindings/leds/xiaomi,vince-front-fill-light-test.yaml
+ create mode 100644 drivers/leds/leds-vince-front-fill-test.c
+
+diff --git a/Documentation/ABI/testing/sysfs-driver-vince-front-fill b/Documentation/ABI/testing/sysfs-driver-vince-front-fill
+new file mode 100644
+index 000000000000..939482c71101
+--- /dev/null
++++ b/Documentation/ABI/testing/sysfs-driver-vince-front-fill
+@@ -0,0 +1,27 @@
++What:		/sys/bus/platform/devices/front-fill-light-test/state
++Date:		September 2026
++Contact:	Kostiantyn Andriiuk <konstantin@andriyuk.com>
++Description:
++		Experimental Xiaomi Vince front fill-light diagnostic state.
++		Reports global attempt count, suspend block, logical GPIO
++		readback, fixed on_ms=100/pulses=10 and software_on_us. The
++		timestamp measures software GPIO writes, not physical current
++		or waveform timing. Before firing: attempts=0, level=0.
++		The driver IC/current table and hardware cutoff are unknown.
++
++What:		/sys/bus/platform/devices/front-fill-light-test/fire_once
++Date:		September 2026
++Contact:	Kostiantyn Andriiuk <konstantin@andriyuk.com>
++Description:
++		Write exactly 1, as root with CAP_SYS_RAWIO, to request the
++		stock ten-pulse front subtorch sequence. A hard hrtimer is
++		armed before the first high and drives low after 100 ms.
++		The request also forces off before returning. Only one attempt
++		per kernel boot, including across unbind/rebind and setup
++		failure. Further requests return EALREADY; during suspend
++		they return EBUSY. No brightness/current/duration selection,
++		automatic trigger or camera-framework integration exists.
++		Probe, managed cleanup, shutdown and suspend force low;
++		resume never restores light or replenishes the attempt.
++		Software timing depends on a functioning CPU and interrupts.
++		It is not a hardware cutoff during a kernel/CPU hang.
+diff --git a/Documentation/devicetree/bindings/leds/xiaomi,vince-front-fill-light-test.yaml b/Documentation/devicetree/bindings/leds/xiaomi,vince-front-fill-light-test.yaml
+new file mode 100644
+index 000000000000..9574b6b37fbd
+--- /dev/null
++++ b/Documentation/devicetree/bindings/leds/xiaomi,vince-front-fill-light-test.yaml
+@@ -0,0 +1,50 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/leds/xiaomi,vince-front-fill-light-test.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Experimental Xiaomi Redmi 5 Plus front fill-light one-shot test
++
++maintainers:
++  - Kostiantyn Andriiuk <konstantin@andriyuk.com>
++
++description: |
++  Provisional board-specific diagnostic binding, not an identified driver-IC
++  binding or upstream-ready LED ABI. Stock msm_frontflash.c programs the
++  separate front fill light over TLMM GPIO36 with ten short pulses. The IC
++  and calibrated current/mode table are unknown. A dedicated built-in driver
++  provides one root-only 100 ms attempt per kernel boot and initializes off.
++  No automatic trigger, continuous-on mode, current setting or charger control.
++
++properties:
++  compatible:
++    const: xiaomi,vince-front-fill-light-test
++
++  enable-gpios:
++    maxItems: 1
++    description: Non-sleeping, active-high MSM8953 TLMM GPIO36; low is off.
++
++  pinctrl-names:
++    items:
++      - const: default
++
++  pinctrl-0: true
++
++required:
++  - compatible
++  - enable-gpios
++  - pinctrl-names
++  - pinctrl-0
++
++additionalProperties: false
++
++examples:
++  - |
++    #include <dt-bindings/gpio/gpio.h>
++    front-fill-light-test {
++        compatible = "xiaomi,vince-front-fill-light-test";
++        enable-gpios = <&tlmm 36 GPIO_ACTIVE_HIGH>;
++        pinctrl-names = "default";
++        pinctrl-0 = <&gpio_front_fill_light_default>;
++    };
+diff --git a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+index 6c209ba8d095..1962bd904f90 100644
+--- a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
++++ b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+@@ -17,6 +17,13 @@ / {
+ 	compatible = "xiaomi,vince", "qcom,msm8953";
+ 	qcom,board-id = <0x1000b 0x08>;
+ 
++	front-fill-light-test {
++		compatible = "xiaomi,vince-front-fill-light-test";
++		enable-gpios = <&tlmm 36 GPIO_ACTIVE_HIGH>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&gpio_front_fill_light_default>;
++	};
++
+ 	gpio-keys {
+ 		pinctrl-names = "default";
+ 		pinctrl-0 = <&gpio_hall_sensor_default>;
+@@ -361,6 +368,14 @@ &spi_6 {
+ &tlmm {
+ 	gpio-reserved-ranges = <0 4>, <16 4>, <135 4>;
+ 
++	gpio_front_fill_light_default: front-fill-light-default-state {
++		pins = "gpio36";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-pull-down;
++		output-low;
++	};
++
+ 	cam_sensor_rear_default: cam-sensor-rear-default-state {
+ 		pins = "gpio33", "gpio62";
+ 		function = "gpio";
+diff --git a/drivers/leds/Kconfig b/drivers/leds/Kconfig
+index c32164f52384..6f83679a3f7c 100644
+--- a/drivers/leds/Kconfig
++++ b/drivers/leds/Kconfig
+@@ -1054,6 +1054,15 @@ config LEDS_ACER_A500
+ 
+ source "drivers/leds/blink/Kconfig"
+ 
++config LEDS_VINCE_FRONT_FILL_TEST
++	bool "Bounded one-shot front fill-light test for Xiaomi Vince"
++	depends on ARM64 && ARCH_QCOM && OF && GPIOLIB && HIGH_RES_TIMERS
++	help
++	  Experimental board-only GPIO pulse protocol. Root may request one
++	  100 ms shot per kernel boot. No continuous LED, camera integration
++	  or calibrated current control. Hardware driver IC is unidentified.
++	  Keep disabled outside the explicitly approved Vince test kernel.
++
+ comment "Flash and Torch LED drivers"
+ source "drivers/leds/flash/Kconfig"
+ 
+diff --git a/drivers/leds/Makefile b/drivers/leds/Makefile
+index e4b430de6420..176edb71dd24 100644
+--- a/drivers/leds/Makefile
++++ b/drivers/leds/Makefile
+@@ -1,4 +1,5 @@
+ # SPDX-License-Identifier: GPL-2.0
++obj-$(CONFIG_LEDS_VINCE_FRONT_FILL_TEST) += leds-vince-front-fill-test.o
+ 
+ # LED Core
+ obj-$(CONFIG_NEW_LEDS)			+= led-core.o
+diff --git a/drivers/leds/leds-vince-front-fill-test.c b/drivers/leds/leds-vince-front-fill-test.c
+new file mode 100644
+index 000000000000..62da607781b0
+--- /dev/null
++++ b/drivers/leds/leds-vince-front-fill-test.c
+@@ -0,0 +1,253 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Bounded experimental front fill-light control for Xiaomi Redmi 5 Plus.
++ * Pulse sequence derived from Xiaomi msm_frontflash.c (GPL-2.0-only):
++ * Copyright (c) 2009-2016, The Linux Foundation. All rights reserved.
++ * Copyright (C) 2018 XiaoMi, Inc.
++ * Copyright (C) 2026 Kostiantyn Andriiuk <konstantin@andriyuk.com>
++ *
++ * This is NOT a calibrated flash driver or a general-purpose LED interface.
++ * The physical driver IC/current table is unknown. No continuous-on mode.
++ */
++
++#include <linux/atomic.h>
++#include <linux/capability.h>
++#include <linux/delay.h>
++#include <linux/device.h>
++#include <linux/gpio/consumer.h>
++#include <linux/hrtimer.h>
++#include <linux/interrupt.h>
++#include <linux/ktime.h>
++#include <linux/math64.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/of_gpio.h>
++#include <linux/platform_device.h>
++#include <linux/pm.h>
++
++#define VINCE_FILL_ON_MS		100
++#define VINCE_FILL_PULSES		10
++#define VINCE_FILL_RESET_MS	5
++
++/* Built-in only: unbind/rebind must not grant another attempt this boot. */
++static atomic_t vince_fill_boot_attempt = ATOMIC_INIT(0);
++
++struct vince_fill_test {
++	struct device *dev;
++	struct gpio_desc *enable;
++	struct hrtimer off_timer;
++	struct mutex lock;
++	u64 on_ns;
++	u64 off_ns;
++	bool blocked;
++};
++
++static enum hrtimer_restart vince_fill_timer_off(struct hrtimer *timer)
++{
++	struct vince_fill_test *fill = container_of(timer, struct vince_fill_test,
++						 off_timer);
++
++	/* Probe rejects sleepable GPIOs; this runs in hard IRQ context. */
++	gpiod_set_value(fill->enable, 0);
++	fill->off_ns = ktime_get_ns();
++	return HRTIMER_NORESTART;
++}
++
++static void vince_fill_off_locked(struct vince_fill_test *fill)
++{
++	hrtimer_cancel(&fill->off_timer);
++	gpiod_set_value(fill->enable, 0);
++	if (fill->on_ns && !fill->off_ns)
++		fill->off_ns = ktime_get_ns();
++}
++
++static void vince_fill_quiesce(void *data)
++{
++	struct vince_fill_test *fill = data;
++
++	mutex_lock(&fill->lock);
++	fill->blocked = true;
++	vince_fill_off_locked(fill);
++	mutex_unlock(&fill->lock);
++}
++
++static ssize_t state_show(struct device *dev, struct device_attribute *attr,
++			 char *buf)
++{
++	struct vince_fill_test *fill = dev_get_drvdata(dev);
++	u64 elapsed_us = 0;
++	ssize_t ret;
++
++	mutex_lock(&fill->lock);
++	if (fill->off_ns > fill->on_ns)
++		elapsed_us = div_u64(fill->off_ns - fill->on_ns, NSEC_PER_USEC);
++	ret = sysfs_emit(buf,
++		"attempts=%d blocked=%d logical_level=%d on_ms=%d pulses=%d software_on_us=%llu\n",
++		atomic_read(&vince_fill_boot_attempt), fill->blocked,
++		gpiod_get_value(fill->enable), VINCE_FILL_ON_MS,
++		VINCE_FILL_PULSES, (unsigned long long)elapsed_us);
++	mutex_unlock(&fill->lock);
++	return ret;
++}
++static DEVICE_ATTR_RO(state);
++
++static ssize_t fire_once_store(struct device *dev, struct device_attribute *attr,
++			      const char *buf, size_t count)
++{
++	struct vince_fill_test *fill = dev_get_drvdata(dev);
++	unsigned long flags;
++	int i, ret;
++
++	if (!capable(CAP_SYS_RAWIO))
++		return -EPERM;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++
++	mutex_lock(&fill->lock);
++	if (fill->blocked) {
++		ret = -EBUSY;
++		goto unlock;
++	}
++	if (atomic_cmpxchg(&vince_fill_boot_attempt, 0, 1)) {
++		ret = -EALREADY;
++		goto unlock;
++	}
++
++	/* Consume the sole attempt even if setup fails; never retry silently. */
++	ret = gpiod_direction_output(fill->enable, 0);
++	if (ret)
++		goto off;
++	msleep(VINCE_FILL_RESET_MS);
++
++	/* Arm before the first high, atomically with the short pulse sequence.
++	 * A late sysfs worker cannot extend the on time while hard IRQs run.
++	 * No logging/sleeping between edges. Delays are not scope measurements.
++	 */
++	local_irq_save(flags);
++	fill->on_ns = ktime_get_ns();
++	fill->off_ns = 0;
++	hrtimer_start(&fill->off_timer, ms_to_ktime(VINCE_FILL_ON_MS),
++		      HRTIMER_MODE_REL_HARD);
++	gpiod_set_value(fill->enable, 1);
++	udelay(25);
++	for (i = 0; i < VINCE_FILL_PULSES; i++) {
++		gpiod_set_value(fill->enable, 0);
++		udelay(1);
++		gpiod_set_value(fill->enable, 1);
++		udelay(1);
++	}
++	local_irq_restore(flags);
++	msleep(VINCE_FILL_ON_MS);
++off:
++	vince_fill_off_locked(fill);
++	msleep(VINCE_FILL_RESET_MS);
++	dev_info(dev, "[vince-front-fill] attempt complete: ret=%d level=%d on_us=%llu\n",
++		 ret, gpiod_get_value(fill->enable),
++		 (unsigned long long)(fill->off_ns > fill->on_ns ?
++		 div_u64(fill->off_ns - fill->on_ns, NSEC_PER_USEC) : 0));
++unlock:
++	mutex_unlock(&fill->lock);
++	return ret ? ret : count;
++}
++static DEVICE_ATTR(fire_once, 0200, NULL, fire_once_store);
++
++static struct attribute *vince_fill_attrs[] = {
++	&dev_attr_state.attr,
++	&dev_attr_fire_once.attr,
++	NULL,
++};
++static const struct attribute_group vince_fill_group = {
++	.attrs = vince_fill_attrs,
++};
++
++static int vince_fill_suspend(struct device *dev)
++{
++	vince_fill_quiesce(dev_get_drvdata(dev));
++	return 0;
++}
++
++static int vince_fill_resume(struct device *dev)
++{
++	struct vince_fill_test *fill = dev_get_drvdata(dev);
++
++	mutex_lock(&fill->lock);
++	vince_fill_off_locked(fill);
++	fill->blocked = false;
++	mutex_unlock(&fill->lock);
++	/* Never restore brightness or reset the global attempt budget. */
++	return 0;
++}
++static DEFINE_SIMPLE_DEV_PM_OPS(vince_fill_pm_ops, vince_fill_suspend,
++			      vince_fill_resume);
++
++static int vince_fill_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct of_phandle_args gpio;
++	struct vince_fill_test *fill;
++	bool correct_gpio;
++	int ret;
++
++	if (!of_machine_is_compatible("xiaomi,vince"))
++		return -ENODEV;
++	ret = of_parse_phandle_with_args(dev->of_node, "enable-gpios",
++					 "#gpio-cells", 0, &gpio);
++	if (ret)
++		return ret;
++	/* Check identity BEFORE claiming/driving any GPIO. */
++	correct_gpio = gpio.args_count == 2 && gpio.args[0] == 36 &&
++		gpio.args[1] == 0 &&
++		of_device_is_compatible(gpio.np, "qcom,msm8953-pinctrl");
++	of_node_put(gpio.np);
++	if (!correct_gpio)
++		return dev_err_probe(dev, -EINVAL, "requires active-high TLMM GPIO36\n");
++
++	fill = devm_kzalloc(dev, sizeof(*fill), GFP_KERNEL);
++	if (!fill)
++		return -ENOMEM;
++	fill->dev = dev;
++	mutex_init(&fill->lock);
++	hrtimer_setup(&fill->off_timer, vince_fill_timer_off, CLOCK_MONOTONIC,
++		      HRTIMER_MODE_REL_HARD);
++	fill->enable = devm_gpiod_get(dev, "enable", GPIOD_OUT_LOW);
++	if (IS_ERR(fill->enable))
++		return dev_err_probe(dev, PTR_ERR(fill->enable), "cannot claim enable GPIO\n");
++	if (gpiod_cansleep(fill->enable) || gpiod_is_active_low(fill->enable))
++		return dev_err_probe(dev, -EINVAL, "requires non-sleeping active-high GPIO\n");
++	platform_set_drvdata(pdev, fill);
++	ret = devm_add_action_or_reset(dev, vince_fill_quiesce, fill);
++	if (ret)
++		return ret;
++	ret = devm_device_add_group(dev, &vince_fill_group);
++	if (ret)
++		return ret;
++	dev_info(dev, "[vince-front-fill] ready, off; one 100 ms attempt per boot\n");
++	return 0;
++}
++
++static void vince_fill_shutdown(struct platform_device *pdev)
++{
++	vince_fill_quiesce(platform_get_drvdata(pdev));
++}
++
++static const struct of_device_id vince_fill_match[] = {
++	{ .compatible = "xiaomi,vince-front-fill-light-test" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, vince_fill_match);
++
++static struct platform_driver vince_fill_driver = {
++	.probe = vince_fill_probe,
++	.shutdown = vince_fill_shutdown,
++	.driver = {
++		.name = "vince-front-fill-test",
++		.of_match_table = vince_fill_match,
++		.pm = pm_sleep_ptr(&vince_fill_pm_ops),
++	},
++};
++builtin_platform_driver(vince_fill_driver);
++
++MODULE_AUTHOR("Kostiantyn Andriiuk <konstantin@andriyuk.com>");
++MODULE_DESCRIPTION("One-shot-only experimental Vince front fill light");
++MODULE_LICENSE("GPL");

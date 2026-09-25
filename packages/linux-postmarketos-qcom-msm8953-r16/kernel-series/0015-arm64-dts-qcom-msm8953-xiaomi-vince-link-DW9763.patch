@@ -1,0 +1,21 @@
+From 6223590120ab5d50e500ad13f1423a9729291883 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Wed, 2 Sep 2026 16:34:55 +0300
+Subject: [PATCH 15/42] arm64: dts: qcom: msm8953-xiaomi-vince: link DW9763
+
+---
+ arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+index f7efd9275b8e..1b3ea96262d3 100644
+--- a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
++++ b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+@@ -191,6 +191,7 @@ camera-sensor@10 { // Rear camera
+ 		dvdd-supply = <&pm8953_l2>;
+ 		dovdd-supply = <&pm8953_l6>;
+ 		vaf-supply = <&pm8953_l17>;
++		lens-focus = <&dw9763>;
+ 
+ 		orientation = <1>;
+ 		rotation = <270>;

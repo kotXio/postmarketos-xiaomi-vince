@@ -1,0 +1,377 @@
+From 911526dd4056e04fb808528620e4961701a80fcd Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sun, 6 Sep 2026 10:49:26 +0300
+Subject: [PATCH 23/42] Input: rmi4: recover reset controllers after system
+ suspend
+
+---
+ drivers/input/rmi4/rmi_driver.c |  53 ++++++++++++----
+ drivers/input/rmi4/rmi_driver.h |   2 +-
+ drivers/input/rmi4/rmi_f01.c    |  12 +++-
+ drivers/input/rmi4/rmi_i2c.c    | 105 +++++++++++++++++++++++++++-----
+ include/linux/rmi.h             |   4 ++
+ 5 files changed, 147 insertions(+), 29 deletions(-)
+
+diff --git a/drivers/input/rmi4/rmi_driver.c b/drivers/input/rmi4/rmi_driver.c
+index 7821728addfa..d08e2e3c459c 100644
+--- a/drivers/input/rmi4/rmi_driver.c
++++ b/drivers/input/rmi4/rmi_driver.c
+@@ -873,13 +873,14 @@ static int rmi_create_function(struct rmi_device *rmi_dev,
+ 	return RMI_SCAN_CONTINUE;
+ }
+ 
+-void rmi_enable_irq(struct rmi_device *rmi_dev, bool clear_wake)
++int rmi_enable_irq(struct rmi_device *rmi_dev, bool clear_wake)
+ {
+ 	struct rmi_device_platform_data *pdata = rmi_get_platform_data(rmi_dev);
+ 	struct rmi_driver_data *data = dev_get_drvdata(&rmi_dev->dev);
+ 	int irq = pdata->irq;
+ 	int irq_flags;
+-	int retval;
++	int retval = 0;
++	int error;
+ 
+ 	mutex_lock(&data->enabled_mutex);
+ 
+@@ -889,11 +890,11 @@ void rmi_enable_irq(struct rmi_device *rmi_dev, bool clear_wake)
+ 	enable_irq(irq);
+ 	data->enabled = true;
+ 	if (clear_wake && device_may_wakeup(rmi_dev->xport->dev)) {
+-		retval = disable_irq_wake(irq);
+-		if (retval)
++		error = disable_irq_wake(irq);
++		if (error)
+ 			dev_warn(&rmi_dev->dev,
+ 				 "Failed to disable irq for wake: %d\n",
+-				 retval);
++				 error);
+ 	}
+ 
+ 	/*
+@@ -902,10 +903,12 @@ void rmi_enable_irq(struct rmi_device *rmi_dev, bool clear_wake)
+ 	 */
+ 	irq_flags = irq_get_trigger_type(pdata->irq);
+ 	if (irq_flags & IRQ_TYPE_EDGE_BOTH)
+-		rmi_process_interrupt_requests(rmi_dev);
++		retval = rmi_process_interrupt_requests(rmi_dev);
+ 
+ out:
+ 	mutex_unlock(&data->enabled_mutex);
++
++	return retval;
+ }
+ 
+ void rmi_disable_irq(struct rmi_device *rmi_dev, bool enable_wake)
+@@ -944,13 +947,19 @@ void rmi_disable_irq(struct rmi_device *rmi_dev, bool enable_wake)
+ 
+ int rmi_driver_suspend(struct rmi_device *rmi_dev, bool enable_wake)
+ {
++	struct rmi_device_platform_data *pdata = rmi_get_platform_data(rmi_dev);
+ 	int retval;
+ 
+-	retval = rmi_suspend_functions(rmi_dev);
+-	if (retval) {
+-		dev_warn(&rmi_dev->dev, "Failed to suspend functions: %d\n",
+-			retval);
+-		return retval;
++	if (enable_wake && pdata->reset_on_system_suspend) {
++		dev_info(&rmi_dev->dev,
++			 "[rmi4-suspend-reset] skipping function suspend\n");
++	} else {
++		retval = rmi_suspend_functions(rmi_dev);
++		if (retval) {
++			dev_warn(&rmi_dev->dev,
++				 "Failed to suspend functions: %d\n", retval);
++			return retval;
++		}
+ 	}
+ 
+ 	rmi_disable_irq(rmi_dev, enable_wake);
+@@ -960,14 +969,25 @@ EXPORT_SYMBOL_GPL(rmi_driver_suspend);
+ 
+ int rmi_driver_resume(struct rmi_device *rmi_dev, bool clear_wake)
+ {
++	struct rmi_device_platform_data *pdata = rmi_get_platform_data(rmi_dev);
+ 	int retval;
+ 
+-	rmi_enable_irq(rmi_dev, clear_wake);
++	retval = rmi_enable_irq(rmi_dev, clear_wake);
++	if (retval && clear_wake && pdata->reset_on_system_suspend) {
++		dev_warn(&rmi_dev->dev,
++			 "[rmi4-suspend-reset] pending-status recovery failed: %d\n",
++			 retval);
++		return retval;
++	}
+ 
+ 	retval = rmi_resume_functions(rmi_dev);
+-	if (retval)
++	if (retval) {
+ 		dev_warn(&rmi_dev->dev, "Failed to resume functions: %d\n",
+ 			retval);
++	} else if (clear_wake && pdata->reset_on_system_suspend) {
++		dev_info(&rmi_dev->dev,
++			 "[rmi4-suspend-reset] core resume complete\n");
++	}
+ 
+ 	return retval;
+ }
+@@ -1000,6 +1020,13 @@ static int rmi_driver_of_probe(struct device *dev,
+ 	if (retval)
+ 		return retval;
+ 
++	pdata->reset_on_system_suspend =
++		of_property_read_bool(dev->of_node,
++				      "syna,reset-on-system-suspend");
++	if (pdata->reset_on_system_suspend)
++		dev_info(dev,
++			 "[rmi4-suspend-reset] system-suspend reset recovery enabled\n");
++
+ 	return 0;
+ }
+ #else
+diff --git a/drivers/input/rmi4/rmi_driver.h b/drivers/input/rmi4/rmi_driver.h
+index 5af5a82128a7..239be914700f 100644
+--- a/drivers/input/rmi4/rmi_driver.h
++++ b/drivers/input/rmi4/rmi_driver.h
+@@ -96,7 +96,7 @@ int rmi_scan_pdt(struct rmi_device *rmi_dev, void *ctx,
+ 		 int (*callback)(struct rmi_device *rmi_dev, void *ctx,
+ 		 const struct pdt_entry *entry));
+ int rmi_probe_interrupts(struct rmi_driver_data *data);
+-void rmi_enable_irq(struct rmi_device *rmi_dev, bool clear_wake);
++int rmi_enable_irq(struct rmi_device *rmi_dev, bool clear_wake);
+ void rmi_disable_irq(struct rmi_device *rmi_dev, bool enable_wake);
+ int rmi_init_functions(struct rmi_driver_data *data);
+ int rmi_initial_reset(struct rmi_device *rmi_dev, void *ctx,
+diff --git a/drivers/input/rmi4/rmi_f01.c b/drivers/input/rmi4/rmi_f01.c
+index 47be64284b25..9f1fe3cff5bf 100644
+--- a/drivers/input/rmi4/rmi_f01.c
++++ b/drivers/input/rmi4/rmi_f01.c
+@@ -683,6 +683,8 @@ static irqreturn_t rmi_f01_attention(int irq, void *ctx)
+ {
+ 	struct rmi_function *fn = ctx;
+ 	struct rmi_device *rmi_dev = fn->rmi_dev;
++	struct rmi_device_platform_data *pdata =
++		rmi_get_platform_data(rmi_dev);
+ 	int error;
+ 	u8 device_status;
+ 
+@@ -698,12 +700,20 @@ static irqreturn_t rmi_f01_attention(int irq, void *ctx)
+ 			 "Device in bootloader mode, please update firmware\n");
+ 
+ 	if (RMI_F01_STATUS_UNCONFIGURED(device_status)) {
+-		dev_warn(&fn->dev, "Device reset detected.\n");
++		if (pdata->reset_on_system_suspend)
++			dev_warn(&fn->dev,
++				 "[rmi4-suspend-reset] device reset detected\n");
++		else
++			dev_warn(&fn->dev, "Device reset detected.\n");
+ 		error = rmi_dev->driver->reset_handler(rmi_dev);
+ 		if (error) {
+ 			dev_err(&fn->dev, "Device reset failed: %d\n", error);
+ 			return IRQ_RETVAL(error);
+ 		}
++
++		if (pdata->reset_on_system_suspend)
++			dev_info(&fn->dev,
++				 "[rmi4-suspend-reset] device reconfiguration complete\n");
+ 	}
+ 
+ 	return IRQ_HANDLED;
+diff --git a/drivers/input/rmi4/rmi_i2c.c b/drivers/input/rmi4/rmi_i2c.c
+index 22bd3c3bb8e4..4471f19b6491 100644
+--- a/drivers/input/rmi4/rmi_i2c.c
++++ b/drivers/input/rmi4/rmi_i2c.c
+@@ -6,6 +6,7 @@
+ 
+ #include <linux/gpio/consumer.h>
+ #include <linux/i2c.h>
++#include <linux/jiffies.h>
+ #include <linux/rmi.h>
+ #include <linux/of.h>
+ #include <linux/delay.h>
+@@ -13,6 +14,8 @@
+ #include "rmi_driver.h"
+ 
+ #define BUFFER_SIZE_INCREMENT 32
++#define RMI_I2C_RESUME_RETRY_MS 20
++#define RMI_I2C_RESUME_TIMEOUT_MS 200
+ 
+ /**
+  * struct rmi_i2c_xport - stores information for i2c communication
+@@ -30,6 +33,10 @@
+  * @reset_gpio: Reference to the reset GPIO
+  * @startup_delay: Milliseconds to pause after powering up the regulators
+  * @reset_delay: Milliseconds to pause after resetting the device
++ * @system_resume_recovery: Restrict target-NACK retries to system resume
++ * @system_resume_deadline: Shared deadline for all resume recovery transfers
++ * @system_resume_retries: Number of retry delays used in this resume
++ * @system_resume_error: First target NACK left after the deadline
+  */
+ struct rmi_i2c_xport {
+ 	struct rmi_transport_dev xport;
+@@ -45,11 +52,47 @@ struct rmi_i2c_xport {
+ 	struct gpio_desc *reset_gpio;
+ 	u32 startup_delay;
+ 	u32 reset_delay;
++	bool system_resume_recovery;
++	unsigned long system_resume_deadline;
++	unsigned int system_resume_retries;
++	int system_resume_error;
+ };
+ 
+ #define RMI_PAGE_SELECT_REGISTER 0xff
+ #define RMI_I2C_PAGE(addr) (((addr) >> 8) & 0xff)
+ 
++static bool rmi_i2c_retry_system_resume(struct rmi_i2c_xport *rmi_i2c,
++					int error, u16 addr)
++{
++	struct i2c_client *client = rmi_i2c->client;
++	unsigned long remaining;
++	unsigned int delay_ms;
++
++	if (!rmi_i2c->system_resume_recovery || error != -ENXIO)
++		return false;
++
++	if (time_after_eq(jiffies, rmi_i2c->system_resume_deadline)) {
++		if (!rmi_i2c->system_resume_error)
++			rmi_i2c->system_resume_error = error;
++		return false;
++	}
++
++	remaining = rmi_i2c->system_resume_deadline - jiffies;
++	delay_ms = jiffies_to_msecs(remaining);
++	delay_ms = min(delay_ms, RMI_I2C_RESUME_RETRY_MS);
++	if (!delay_ms)
++		delay_ms = 1;
++
++	if (!rmi_i2c->system_resume_retries)
++		dev_warn(&client->dev,
++			 "[rmi4-suspend-reset] resume NACK at %#06x; retrying for at most %u ms\n",
++			 addr, RMI_I2C_RESUME_TIMEOUT_MS);
++
++	rmi_i2c->system_resume_retries++;
++	msleep(delay_ms);
++	return true;
++}
++
+ /*
+  * rmi_set_page - Set RMI page
+  * @xport: The pointer to the rmi_transport_dev struct
+@@ -70,11 +113,19 @@ static int rmi_set_page(struct rmi_i2c_xport *rmi_i2c, u8 page)
+ 	u8 txbuf[2] = {RMI_PAGE_SELECT_REGISTER, page};
+ 	int retval;
+ 
+-	retval = i2c_master_send(client, txbuf, sizeof(txbuf));
++	do {
++		retval = i2c_master_send(client, txbuf, sizeof(txbuf));
++		if (retval == sizeof(txbuf))
++			break;
++		if (retval >= 0)
++			retval = -EIO;
++	} while (rmi_i2c_retry_system_resume(rmi_i2c, retval,
++					      RMI_PAGE_SELECT_REGISTER));
++
+ 	if (retval != sizeof(txbuf)) {
+-		dev_err(&client->dev,
+-			"%s: set page failed: %d.", __func__, retval);
+-		return (retval < 0) ? retval : -EIO;
++		dev_err(&client->dev, "%s: set page failed: %d.\n",
++			__func__, retval);
++		return retval;
+ 	}
+ 
+ 	rmi_i2c->page = page;
+@@ -115,11 +166,13 @@ static int rmi_i2c_write_block(struct rmi_transport_dev *xport, u16 addr,
+ 			goto exit;
+ 	}
+ 
+-	retval = i2c_master_send(client, rmi_i2c->tx_buf, tx_size);
+-	if (retval == tx_size)
+-		retval = 0;
+-	else if (retval >= 0)
+-		retval = -EIO;
++	do {
++		retval = i2c_master_send(client, rmi_i2c->tx_buf, tx_size);
++		if (retval == tx_size)
++			retval = 0;
++		else if (retval >= 0)
++			retval = -EIO;
++	} while (rmi_i2c_retry_system_resume(rmi_i2c, retval, addr));
+ 
+ exit:
+ 	rmi_dbg(RMI_DEBUG_XPORT, &client->dev,
+@@ -160,11 +213,13 @@ static int rmi_i2c_read_block(struct rmi_transport_dev *xport, u16 addr,
+ 			goto exit;
+ 	}
+ 
+-	retval = i2c_transfer(client->adapter, msgs, ARRAY_SIZE(msgs));
+-	if (retval == ARRAY_SIZE(msgs))
+-		retval = 0; /* success */
+-	else if (retval >= 0)
+-		retval = -EIO;
++	do {
++		retval = i2c_transfer(client->adapter, msgs, ARRAY_SIZE(msgs));
++		if (retval == ARRAY_SIZE(msgs))
++			retval = 0; /* success */
++		else if (retval >= 0)
++			retval = -EIO;
++	} while (rmi_i2c_retry_system_resume(rmi_i2c, retval, addr));
+ 
+ exit:
+ 	rmi_dbg(RMI_DEBUG_XPORT, &client->dev,
+@@ -332,6 +387,7 @@ static int rmi_i2c_resume(struct device *dev)
+ {
+ 	struct i2c_client *client = to_i2c_client(dev);
+ 	struct rmi_i2c_xport *rmi_i2c = i2c_get_clientdata(client);
++	struct rmi_device_platform_data *pdata;
+ 	int ret;
+ 
+ 	ret = regulator_bulk_enable(ARRAY_SIZE(rmi_i2c->supplies),
+@@ -341,7 +397,28 @@ static int rmi_i2c_resume(struct device *dev)
+ 
+ 	msleep(rmi_i2c->startup_delay);
+ 
++	pdata = rmi_get_platform_data(rmi_i2c->xport.rmi_dev);
++	if (pdata->reset_on_system_suspend) {
++		rmi_i2c->system_resume_recovery = true;
++		rmi_i2c->system_resume_deadline = jiffies +
++			msecs_to_jiffies(RMI_I2C_RESUME_TIMEOUT_MS);
++		rmi_i2c->system_resume_retries = 0;
++		rmi_i2c->system_resume_error = 0;
++		dev_info(dev,
++			 "[rmi4-suspend-reset] system-resume recovery armed\n");
++	}
++
+ 	ret = rmi_driver_resume(rmi_i2c->xport.rmi_dev, true);
++
++	if (pdata->reset_on_system_suspend) {
++		rmi_i2c->system_resume_recovery = false;
++		if (!ret && rmi_i2c->system_resume_error)
++			ret = rmi_i2c->system_resume_error;
++		dev_info(dev,
++			 "[rmi4-suspend-reset] system-resume recovery complete: ret=%d retries=%u\n",
++			 ret, rmi_i2c->system_resume_retries);
++	}
++
+ 	if (ret)
+ 		dev_warn(dev, "Failed to resume device: %d\n", ret);
+ 
+diff --git a/include/linux/rmi.h b/include/linux/rmi.h
+index ab7eea01ab42..65257c9c48a4 100644
+--- a/include/linux/rmi.h
++++ b/include/linux/rmi.h
+@@ -208,10 +208,14 @@ struct rmi_device_platform_data_spi {
+  * @reset_delay_ms - after issuing a reset command to the touch sensor, the
+  * driver waits a few milliseconds to give the firmware a chance to
+  * re-initialize.  You can override the default wait period here.
++ * @reset_on_system_suspend - the platform can reset or temporarily hide the
++ * sensor during system suspend, so function sleep is skipped and initial
++ * system-resume target NACKs are recovered within a bounded interval.
+  * @irq: irq associated with the attn gpio line, or negative
+  */
+ struct rmi_device_platform_data {
+ 	int reset_delay_ms;
++	bool reset_on_system_suspend;
+ 	int irq;
+ 
+ 	struct rmi_device_platform_data_spi spi_data;

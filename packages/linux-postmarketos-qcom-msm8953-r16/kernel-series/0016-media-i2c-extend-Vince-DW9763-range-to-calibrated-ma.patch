@@ -1,0 +1,23 @@
+From 9c663ababf75a35285aa159a31f3918a37599458 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Thu, 3 Sep 2026 16:11:15 +0300
+Subject: [PATCH 16/42] media: i2c: extend Vince DW9763 range to calibrated
+ macro
+
+---
+ drivers/media/i2c/dw9768.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/media/i2c/dw9768.c b/drivers/media/i2c/dw9768.c
+index 1923bf9664da..0334ae73eae8 100644
+--- a/drivers/media/i2c/dw9768.c
++++ b/drivers/media/i2c/dw9768.c
+@@ -126,7 +126,7 @@ static const struct dw9768_chip_info dw9763_chip = {
+ 	.supply_names = dw9763_supply_names,
+ 	.num_supplies = ARRAY_SIZE(dw9763_supply_names),
+ 	.supply_voltage_uv = 2850000,
+-	.max_focus_pos = 517,
++	.max_focus_pos = 726,
+ 	.default_focus_pos = 214,
+ 	.aac_mode = 5,
+ 	.aac_timing = 0x38,

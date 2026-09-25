@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=FM Radio (Vince controls)
+Comment=Native receiver tuning and mute; audio routing is separate
+Exec=qv4l2 --radio-device=/dev/radio0
+Icon=qv4l2
+Terminal=false
+Type=Application
+Categories=AudioVideo;
+Keywords=FM;Radio;V4L2;

@@ -1,0 +1,52 @@
+From afa4e696c5fa95788e03ba3404db3fc06c2858cb Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sun, 6 Sep 2026 11:16:20 +0300
+Subject: [PATCH 26/42] Input: rmi4: serialize resume recovery bookkeeping
+
+---
+ drivers/input/rmi4/rmi_i2c.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/input/rmi4/rmi_i2c.c b/drivers/input/rmi4/rmi_i2c.c
+index b0c9cb3af97e..362e268e79d4 100644
+--- a/drivers/input/rmi4/rmi_i2c.c
++++ b/drivers/input/rmi4/rmi_i2c.c
+@@ -388,6 +388,7 @@ static int rmi_i2c_resume(struct device *dev)
+ 	struct i2c_client *client = to_i2c_client(dev);
+ 	struct rmi_i2c_xport *rmi_i2c = i2c_get_clientdata(client);
+ 	bool reset_on_system_suspend;
++	unsigned int retries = 0;
+ 	int ret;
+ 
+ 	ret = regulator_bulk_enable(ARRAY_SIZE(rmi_i2c->supplies),
+@@ -400,11 +401,13 @@ static int rmi_i2c_resume(struct device *dev)
+ 	reset_on_system_suspend =
+ 		rmi_has_system_suspend_reset(rmi_i2c->xport.rmi_dev);
+ 	if (reset_on_system_suspend) {
++		mutex_lock(&rmi_i2c->page_mutex);
+ 		rmi_i2c->system_resume_recovery = true;
+ 		rmi_i2c->system_resume_deadline = jiffies +
+ 			msecs_to_jiffies(RMI_I2C_RESUME_TIMEOUT_MS);
+ 		rmi_i2c->system_resume_retries = 0;
+ 		rmi_i2c->system_resume_error = 0;
++		mutex_unlock(&rmi_i2c->page_mutex);
+ 		dev_info(dev,
+ 			 "[rmi4-suspend-reset] system-resume recovery armed\n");
+ 	}
+@@ -412,12 +415,15 @@ static int rmi_i2c_resume(struct device *dev)
+ 	ret = rmi_driver_resume(rmi_i2c->xport.rmi_dev, true);
+ 
+ 	if (reset_on_system_suspend) {
++		mutex_lock(&rmi_i2c->page_mutex);
+ 		rmi_i2c->system_resume_recovery = false;
+ 		if (!ret && rmi_i2c->system_resume_error)
+ 			ret = rmi_i2c->system_resume_error;
++		retries = rmi_i2c->system_resume_retries;
++		mutex_unlock(&rmi_i2c->page_mutex);
+ 		dev_info(dev,
+ 			 "[rmi4-suspend-reset] system-resume recovery complete: ret=%d retries=%u\n",
+-			 ret, rmi_i2c->system_resume_retries);
++			 ret, retries);
+ 	}
+ 
+ 	if (ret)

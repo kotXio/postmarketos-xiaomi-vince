@@ -1,0 +1,83 @@
+From f39073fd6053a625c44b9b1a60f68b4794fb0d17 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sat, 12 Sep 2026 09:45:47 +0300
+Subject: [PATCH 29/42] pstore: remove unused console checkpoint API
+
+The temporary checkpoint API has no callers in the accepted production
+kernel. Restore the original pstore implementation for the cleaned
+build.
+
+Signed-off-by: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+---
+ fs/pstore/platform.c   | 37 -------------------------------------
+ include/linux/pstore.h |  9 ---------
+ 2 files changed, 46 deletions(-)
+
+diff --git a/fs/pstore/platform.c b/fs/pstore/platform.c
+index aa34483b9c00..1d76c9d92056 100644
+--- a/fs/pstore/platform.c
++++ b/fs/pstore/platform.c
+@@ -270,43 +270,6 @@ void pstore_record_init(struct pstore_record *record,
+ 	record->time = ns_to_timespec64(ktime_get_real_fast_ns());
+ }
+ 
+-/**
+- * pstore_write_console_checkpoint - write a small record directly to pstore
+- * @buf: checkpoint bytes to store
+- * @size: number of bytes in @buf
+- *
+- * This bypasses the printk console path so a sleepable device-PM callback can
+- * leave a reset-surviving checkpoint after console_suspend_all(). Callers must
+- * provide a short, fixed record and must not call this from atomic context.
+- */
+-int pstore_write_console_checkpoint(const char *buf, size_t size)
+-{
+-	struct pstore_record record;
+-	int ret;
+-
+-	if (!buf || !size || size > 128)
+-		return -EINVAL;
+-
+-	might_sleep();
+-	mutex_lock(&psinfo_lock);
+-	if (!psinfo) {
+-		ret = -ENODEV;
+-	} else if (!(psinfo->flags & PSTORE_FLAGS_CONSOLE) ||
+-		   !psinfo->write) {
+-		ret = -EOPNOTSUPP;
+-	} else {
+-		pstore_record_init(&record, psinfo);
+-		record.type = PSTORE_TYPE_CONSOLE;
+-		record.buf = (char *)buf;
+-		record.size = size;
+-		ret = psinfo->write(&record);
+-	}
+-	mutex_unlock(&psinfo_lock);
+-
+-	return ret;
+-}
+-EXPORT_SYMBOL_GPL(pstore_write_console_checkpoint);
+-
+ /*
+  * callback from kmsg_dump. Save as much as we can (up to kmsg_bytes) from the
+  * end of the buffer.
+diff --git a/include/linux/pstore.h b/include/linux/pstore.h
+index 48d95b10e911..fed601053c51 100644
+--- a/include/linux/pstore.h
++++ b/include/linux/pstore.h
+@@ -210,15 +210,6 @@ struct pstore_info {
+ extern int pstore_register(struct pstore_info *);
+ extern void pstore_unregister(struct pstore_info *);
+ 
+-#if IS_REACHABLE(CONFIG_PSTORE)
+-int pstore_write_console_checkpoint(const char *buf, size_t size);
+-#else
+-static inline int pstore_write_console_checkpoint(const char *buf, size_t size)
+-{
+-	return -EOPNOTSUPP;
+-}
+-#endif
+-
+ struct pstore_ftrace_record {
+ 	unsigned long ip;
+ 	unsigned long parent_ip;

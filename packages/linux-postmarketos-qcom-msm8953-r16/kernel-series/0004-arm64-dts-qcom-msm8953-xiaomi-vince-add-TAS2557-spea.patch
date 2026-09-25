@@ -1,0 +1,165 @@
+From a68af98ee92abe93bc78ef1ee808cd907f80ab9c Mon Sep 17 00:00:00 2001
+From: Gianluca Boiano <morf3089@gmail.com>
+Date: Wed, 17 Jun 2026 18:36:19 +0200
+Subject: [PATCH 04/42] arm64: dts: qcom: msm8953-xiaomi-vince: add TAS2557
+ speaker amplifier
+
+Wire up the TAS2557 mono speaker amplifier on the Redmi 5 Plus (vince):
+
+ - it sits on i2c_2 at 0x4c with reset on GPIO86 and IRQ on GPIO87; its
+   AVDD/DVDD/IOVDD pins are fed by the always-on 1.8 V rail pm8953_l6, and
+   VBAT by the always-on battery rail;
+
+ - it is the external PA on Quinary MI2S.  The Android mixer paths route
+   the speaker through QUIN_MI2S_RX, and the register-compatible Motorola
+   ocean (tfa9874) and Fairphone 3 (aw8898) use Quinary as well.  Add a
+   dedicated Quinary MI2S dai-link for the amplifier and register the
+   QUINARY_MI2S_RX AFE DAI (SD0, per the downstream).  The internal codec
+   stays on Primary MI2S, so earpiece and headphones are unaffected;
+
+ - the MI2S pins (gpio88/91/93 plus the gpio92 word-clock, which uses the
+   dedicated pri_mi2s_ws pinmux function) are configured.  The LPASS
+   routes Quinary onto these pins through the quin iomux that the
+   apq8016_sbc machine driver already programs in its MI2S_QUINARY path,
+   so no machine-driver change is required.
+
+Signed-off-by: Gianluca Boiano <morf3089@gmail.com>
+---
+ .../boot/dts/qcom/msm8953-xiaomi-vince.dts    | 96 ++++++++++++++++---
+ 1 file changed, 84 insertions(+), 12 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+index 3a353af66934..c1573f43fafc 100644
+--- a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
++++ b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+@@ -185,6 +185,22 @@ &gpu_zap_shader {
+ 	firmware-name = "qcom/msm8953/xiaomi/vince/a506_zap.mdt";
+ };
+ 
++&i2c_2 {
++	tas2557: codec@4c {
++		compatible = "ti,tas2557";
++		reg = <0x4c>;
++		#sound-dai-cells = <0>;
++
++		reset-gpios = <&tlmm 86 GPIO_ACTIVE_LOW>;
++		interrupts-extended = <&tlmm 87 IRQ_TYPE_LEVEL_HIGH>;
++
++		/* AVDD/DVDD/IOVDD on the always-on 1.8 V rail */
++		iovdd-supply = <&pm8953_l6>;
++		avdd-supply = <&pm8953_l6>;
++		dvdd-supply = <&pm8953_l6>;
++	};
++};
++
+ &i2c_3 {
+ 	touchscreen@1 {
+ 		compatible = "novatek,nt36672a-ts";
+@@ -223,6 +239,13 @@ &pmi8950_wled {
+ 	qcom,cabc;
+ };
+ 
++&q6afedai {
++	dai@127 {
++		reg = <QUINARY_MI2S_RX>;
++		qcom,sd-lines = <0>;
++	};
++};
++
+ &rmi4_ts {
+ 	status = "disabled";
+ };
+@@ -234,13 +257,30 @@ &sound_card {
+ 	pinctrl-0 = <&cdc_pdm_lines_act
+ 		&cdc_pdm_lines_2_act
+ 		&cdc_pdm_comp_lines_act
+-		&tlmm_pri_act>;
++		&pri_mi2_default>;
+ 	pinctrl-1 = <&cdc_pdm_lines_sus
+ 		&cdc_pdm_lines_2_sus
+ 		&cdc_pdm_comp_lines_sus
+-		&tlmm_pri_sus>;
++		&pri_mi2s_sleep>;
+ 
+ 	status = "okay";
++
++	/* TAS2557 external speaker amplifier on Quinary MI2S */
++	quinary-mi2s-dai-link {
++		link-name = "Quinary MI2S";
++
++		cpu {
++			sound-dai = <&q6afedai QUINARY_MI2S_RX>;
++		};
++
++		platform {
++			sound-dai = <&q6routing>;
++		};
++
++		codec {
++			sound-dai = <&tas2557>;
++		};
++	};
+ };
+ 
+ &spi_6 {
+@@ -264,18 +304,50 @@ gpio_hall_sensor_default: gpio-hall-sensor-state {
+ 		bias-pull-up;
+ 	};
+ 
+-	tlmm_pri_act: pri-tlmm-state {
+-		pins = "gpio88", "gpio91", "gpio93";
+-		function = "pri_mi2s";
+-		drive-strength = <8>;
+-		bias-disable;
++	pri_mi2_default: pri-mi2s-default-state {
++		sck-pins {
++			pins = "gpio91";
++			function = "pri_mi2s";
++			drive-strength = <8>;
++			bias-disable;
++		};
++
++		ws-pins {
++			pins = "gpio92";
++			function = "pri_mi2s_ws";
++			drive-strength = <8>;
++			bias-disable;
++		};
++
++		data-pins {
++			pins = "gpio88", "gpio93";
++			function = "pri_mi2s";
++			drive-strength = <8>;
++			bias-disable;
++		};
+ 	};
+ 
+-	tlmm_pri_sus: pri-tlmm-state {
+-		pins = "gpio88", "gpio91", "gpio93";
+-		function = "pri_mi2s";
+-		drive-strength = <2>;
+-		bias-pull-down;
++	pri_mi2s_sleep: pri-mi2s-sleep-state {
++		sck-pins {
++			pins = "gpio91";
++			function = "pri_mi2s";
++			drive-strength = <2>;
++			bias-pull-down;
++		};
++
++		ws-pins {
++			pins = "gpio92";
++			function = "pri_mi2s_ws";
++			drive-strength = <2>;
++			bias-pull-down;
++		};
++
++		data-pins {
++			pins = "gpio88", "gpio93";
++			function = "pri_mi2s";
++			drive-strength = <2>;
++			bias-pull-down;
++		};
+ 	};
+ };
+ 

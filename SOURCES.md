@@ -257,6 +257,73 @@ minimum-current channel tests before combined and live-reconfiguration tests.
 The published patch does not copy the roughly 2700-line downstream driver and
 does not implement its private trigger interface.
 
+## Cumulative r16 front light, infrared and FM
+
+The exact cumulative build is published under
+[`packages/linux-postmarketos-qcom-msm8953-r16`](packages/linux-postmarketos-qcom-msm8953-r16/README.md).
+Its mail patches preserve the original authors where code was directly
+backported. Project-authored patches use
+`Kostiantyn Andriiuk <konstantin@andriyuk.com>`.
+
+### Front selfie light
+
+The front-light driver is project-authored around the standard Linux LED class.
+Its GPIO36 ten-pulse programming sequence is adapted from the GPLv2
+[`msm_frontflash.c`](https://github.com/halcyonlv/kernel_xiaomi_msm8953/blob/8a888d5f52dce41b02539508f9211da5ac6c65ec/techpack/camera-legacy/sensor/flash/msm_frontflash.c)
+downstream implementation. The public patch retains the applicable Linux
+Foundation and Xiaomi copyright notices. The standard
+[Linux LED class](https://docs.kernel.org/leds/leds-class.html) supplies the
+user-facing interface.
+
+Only the stock-derived binary subtorch mode was carried over. No downstream
+camera-flash framework, current table or private trigger interface was copied.
+
+### SPI infrared transmitter
+
+The infrared implementation extends Linux's existing `ir-spi` driver and
+rc-core interface. The board route and electrical setup came from the pinned
+Xiaomi downstream
+[`vince-qrd.dtsi`](https://github.com/xiaomi-msm8953-devs/android_kernel_xiaomi_msm8953/blob/dcaf331bd84a5faf23b8641ff195e4833a5c47bc/arch/arm64/boot/dts/qcom/xiaomi/vince/vince-qrd.dtsi#L477),
+[`vince-pinctrl.dtsi`](https://github.com/xiaomi-msm8953-devs/android_kernel_xiaomi_msm8953/blob/dcaf331bd84a5faf23b8641ff195e4833a5c47bc/arch/arm64/boot/dts/qcom/xiaomi/vince/vince-pinctrl.dtsi),
+and
+[`msm8953.dtsi`](https://github.com/xiaomi-msm8953-devs/android_kernel_xiaomi_msm8953/blob/dcaf331bd84a5faf23b8641ff195e4833a5c47bc/arch/arm64/boot/dts/qcom/msm8953.dtsi#L716).
+The legacy
+[`peelir.c`](https://github.com/xiaomi-msm8953-devs/android_kernel_xiaomi_msm8953/blob/dcaf331bd84a5faf23b8641ff195e4833a5c47bc/drivers/media/rc/peelir.c)
+driver was used to confirm SPI6/CS0, regulator use and the `960 kHz` sampling
+contract. Its ioctl/mmap driver was not copied or ported.
+
+The transmitter follows the standard Linux
+[LIRC transmit API](https://docs.kernel.org/userspace-api/media/rc/lirc-dev-intro.html).
+No proprietary ConsumerIR HAL is distributed.
+
+### Native FM receiver and audio
+
+The receive-only V4L2 FM bridge is project-authored. Packet and control
+semantics were derived from Xiaomi's GPL kernel
+[`radio-iris.c`](https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/5551bfa07d4eb194891a2d79504cbb95947ce6c5/drivers/media/radio/radio-iris.c)
+and Qualcomm's GPL
+[`radio-iris-transport.c`](https://android.googlesource.com/kernel/msm/+/8bbaf739b6e8c1b095cc6e10c0a850fe2976d8e7/drivers/media/radio/radio-iris-transport.c)
+RPMSG transport. The result is a smaller, receive-only native driver rather
+than a direct copy of the Android IRIS stack. It exposes the standard
+[V4L2 radio interface](https://docs.kernel.org/userspace-api/media/v4l/dev-radio.html).
+
+The internal 48 kHz stereo path and UCM route use the stock FM DAI topology and
+parameter values documented by Xiaomi's
+[`msm8952-dai-links.c`](https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/5551bfa07d4eb194891a2d79504cbb95947ce6c5/sound/soc/msm/msm8952-dai-links.c)
+and
+[`msm-dai-q6-v2.c`](https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/5551bfa07d4eb194891a2d79504cbb95947ce6c5/sound/soc/msm/qdsp6v2/msm-dai-q6-v2.c).
+
+Three Q6ASM lifetime/error fixes are direct upstream Linux backports with
+Srinivas Kandagatla's authorship and the original review trail preserved:
+
+1. [`cee3e63e7106`](https://github.com/torvalds/linux/commit/cee3e63e7106c3c81b2053371fdf14240bfba2fc)
+2. [`048c540ee76d`](https://github.com/torvalds/linux/commit/048c540ee76ded666bda74f9dae1ca3254e0633c)
+3. [`4b4db09f283d`](https://github.com/torvalds/linux/commit/4b4db09f283df65d780bc7cee66cb4a7e9bf4770)
+
+The released qv4l2 APK is unmodified Alpine `v4l-utils` `1.32.0-r1`, packaging
+commit `5e1b822309fb17cc2ebd46d6fbacb1763acbcdd1`. Its upstream source is
+[`v4l-utils` commit `5a666c7c`](https://github.com/gjasny/v4l-utils/tree/5a666c7ce89c00d66aa8e53c8f098a0c6c401f91).
+
 ## Angelfish and hardware video
 
 The Angelfish launcher workaround is project-authored from controlled A/B

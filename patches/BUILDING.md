@@ -1,5 +1,13 @@
 # Build the cumulative Vince kernel
 
+For the exact tested `r16` package, use the self-contained recipe under
+[`packages/linux-postmarketos-qcom-msm8953-r16`](../packages/linux-postmarketos-qcom-msm8953-r16/README.md).
+It includes the pinned configuration, changed-source manifest and all 43
+patches in the order used by the accepted APK.
+
+The steps below reproduce the shorter patch series used by the earlier public
+releases.
+
 Use an ARM64 Linux host or VM with four CPUs and about `8 GiB` RAM,
 pmbootstrap `3.11.1` and postmarketOS `v26.06`. Keep the sources on a Linux
 filesystem. Run the following from the extracted source archive or this

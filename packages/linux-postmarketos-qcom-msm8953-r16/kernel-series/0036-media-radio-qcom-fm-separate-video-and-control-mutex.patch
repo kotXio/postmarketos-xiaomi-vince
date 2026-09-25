@@ -1,0 +1,92 @@
+From 723239f9325d53105a715963727b647fef75f163 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sun, 13 Sep 2026 16:17:14 +0300
+Subject: [PATCH 36/42] media: radio: qcom-fm: separate video and control
+ mutexes
+
+Confirmed native v1 control enumeration self-deadlocks: video_ioctl2 holds video.lock and v4l2_query_ext_ctrl takes the same handler lock. Preserve its private mutex, main-to-handler order and locking internal close/PM setters. No hardware, protocol, audio or kernel-image change.
+
+Signed-off-by: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+---
+ .../radio/qcom-fm-native/radio-qcom-fm.c      | 22 ++++++++++++++-----
+ 1 file changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/media/radio/qcom-fm-native/radio-qcom-fm.c b/drivers/media/radio/qcom-fm-native/radio-qcom-fm.c
+index 3b682baddcba..34de1ebbdf64 100644
+--- a/drivers/media/radio/qcom-fm-native/radio-qcom-fm.c
++++ b/drivers/media/radio/qcom-fm-native/radio-qcom-fm.c
+@@ -8,6 +8,7 @@
+  */
+ #include <linux/completion.h>
+ #include <linux/delay.h>
++#include <linux/lockdep.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
+ #include <linux/of.h>
+@@ -30,7 +31,7 @@ struct qcom_fm {
+ 	struct v4l2_ctrl_handler controls;
+ 	struct rpmsg_device *rpdev;
+ 	struct rpmsg_endpoint *ept; /* Explicit ownership: destroy before freeing state. */
+-	struct mutex lock; /* ioctl, controls, close, remove and PM serialization */
++	struct mutex lock; /* main/video -> controls.lock; close/remove/PM too */
+ 	spinlock_t rx_lock; /* callback-owned transaction/cached telemetry */
+ 	struct completion done;
+ 	bool pending;
+@@ -66,6 +67,7 @@ static int fm_command(struct qcom_fm *fm, u16 op, const u8 *p, size_t n)
+ 	unsigned int timeout = op == FM_SEARCH ? 12000 : 3000;
+ 	int ret;
+ 
++	lockdep_assert_held(&fm->lock);
+ 	if (fm->disconnected || !fm->rpdev)
+ 		return -ENODEV;
+ 	if (fm->faulted && op != FM_DISABLE && op != FM_CANCEL)
+@@ -259,6 +261,12 @@ static int fm_control(struct v4l2_ctrl *ctrl)
+ 	u8 config[12];
+ 	int ret;
+ 
++	/* video_ioctl2 and internal close/PM setters take main -> handler.
++	 * Never acquire main here: the framework already holds handler.
++	 */
++	lockdep_assert_held(&fm->lock);
++	lockdep_assert_held(fm->controls.lock);
++
+ 	if (fm->disconnected)
+ 		return -ENODEV;
+ 	if (ctrl->id == V4L2_CID_AUDIO_MUTE) {
+@@ -457,7 +465,8 @@ static int fm_close(struct file *file)
+ 	if (!--fm->users && !fm->disconnected) {
+ 		if (!fm_stop(fm)) {
+ 			fm->muted = true;
+-			__v4l2_ctrl_s_ctrl(v4l2_ctrl_find(&fm->controls,
++			/* Main is held; helper takes the distinct handler mutex. */
++			v4l2_ctrl_s_ctrl(v4l2_ctrl_find(&fm->controls,
+ 						V4L2_CID_AUDIO_MUTE), 1);
+ 		}
+ 	}
+@@ -519,7 +528,10 @@ static int fm_probe(struct rpmsg_device *rpdev)
+ 		goto free;
+ 	fm->v4l2.release = fm_free;
+ 	v4l2_ctrl_handler_init(&fm->controls, 2);
+-	fm->controls.lock = &fm->lock;
++	/* Keep the handler's private mutex: ioctl core takes video.lock
++	 * before querying/setting controls. Sharing it would self-deadlock.
++	 * All setters use main/video -> handler, including close and PM.
++	 */
+ 	v4l2_ctrl_new_std(&fm->controls, &fm_control_ops, V4L2_CID_AUDIO_MUTE, 0, 1, 1, 1);
+ 	v4l2_ctrl_new_std_menu(&fm->controls, &fm_control_ops,
+ 		V4L2_CID_TUNE_DEEMPHASIS, V4L2_DEEMPHASIS_75_uS,
+@@ -589,7 +601,7 @@ static int fm_suspend(struct device *dev)
+ 	if (!ret) {
+ 		fm->suspended = true;
+ 		fm->muted = true;
+-		__v4l2_ctrl_s_ctrl(v4l2_ctrl_find(&fm->controls, V4L2_CID_AUDIO_MUTE), 1);
++		v4l2_ctrl_s_ctrl(v4l2_ctrl_find(&fm->controls, V4L2_CID_AUDIO_MUTE), 1);
+ 	}
+ 	mutex_unlock(&fm->lock);
+ 	return ret;
+@@ -621,4 +633,4 @@ module_rpmsg_driver(fm_driver);
+ MODULE_AUTHOR("Kostiantyn Andriiuk <konstantin@andriyuk.com>");
+ MODULE_DESCRIPTION("Experimental Vince receive-only WCNSS FM V4L2 bridge");
+ MODULE_LICENSE("GPL");
+-MODULE_VERSION("0.1");
++MODULE_VERSION("0.2");

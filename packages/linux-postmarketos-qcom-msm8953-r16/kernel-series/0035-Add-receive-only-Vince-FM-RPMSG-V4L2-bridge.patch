@@ -1,0 +1,920 @@
+From 18cb2861e8461cc02bbb22aed16758632555bb47 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sun, 13 Sep 2026 15:33:00 +0300
+Subject: [PATCH 35/42] Add receive-only Vince FM RPMSG V4L2 bridge
+
+---
+ drivers/media/radio/qcom-fm-native/Makefile   |   2 +
+ drivers/media/radio/qcom-fm-native/fm-wire.h  | 172 +++++
+ .../radio/qcom-fm-native/radio-qcom-fm.c      | 624 ++++++++++++++++++
+ .../media/radio/qcom-fm-native/test-wire.c    |  82 +++
+ 4 files changed, 880 insertions(+)
+ create mode 100644 drivers/media/radio/qcom-fm-native/Makefile
+ create mode 100644 drivers/media/radio/qcom-fm-native/fm-wire.h
+ create mode 100644 drivers/media/radio/qcom-fm-native/radio-qcom-fm.c
+ create mode 100644 drivers/media/radio/qcom-fm-native/test-wire.c
+
+diff --git a/drivers/media/radio/qcom-fm-native/Makefile b/drivers/media/radio/qcom-fm-native/Makefile
+new file mode 100644
+index 000000000000..8e9c441b7fd8
+--- /dev/null
++++ b/drivers/media/radio/qcom-fm-native/Makefile
+@@ -0,0 +1,2 @@
++# SPDX-License-Identifier: GPL-2.0-only
++obj-m += radio-qcom-fm.o
+diff --git a/drivers/media/radio/qcom-fm-native/fm-wire.h b/drivers/media/radio/qcom-fm-native/fm-wire.h
+new file mode 100644
+index 000000000000..d4bf219e4982
+--- /dev/null
++++ b/drivers/media/radio/qcom-fm-native/fm-wire.h
+@@ -0,0 +1,172 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Copyright (C) 2026 Kostiantyn Andriiuk */
++#ifndef VINCE_FM_WIRE_H
++#define VINCE_FM_WIRE_H
++#ifdef __KERNEL__
++#include <linux/types.h>
++#else
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++typedef uint8_t u8;
++typedef uint16_t u16;
++typedef uint32_t u32;
++#endif
++
++#define FM_ENABLE 0x4c01
++#define FM_DISABLE 0x4c02
++#define FM_GET_CONFIG 0x4c03
++#define FM_SET_CONFIG 0x4c04
++#define FM_MUTE 0x4c05
++#define FM_STATION 0x4c0a
++#define FM_SEARCH 0x4c0e
++#define FM_CANCEL 0x4c11
++#define FM_TUNE 0x5401
++#define FM_LOW 87500U
++#define FM_HIGH 108000U
++#define FM_REPLY_MAX 13
++
++static inline u32 fm_le32(const u8 *p)
++{
++	return (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24;
++}
++
++static inline void fm_put32(u8 *p, u32 v)
++{
++	p[0] = v;
++	p[1] = v >> 8;
++	p[2] = v >> 16;
++	p[3] = v >> 24;
++}
++
++static inline bool fm_frequency_valid(u32 khz)
++{
++	return khz >= FM_LOW && khz <= FM_HIGH && !((khz - FM_LOW) % 50);
++}
++
++static inline bool fm_config_valid(const u8 *p, size_t n)
++{
++	return p && n == 12 && p[0] <= 1 && p[1] <= 2 && p[2] <= 2 &&
++		p[3] <= 2 && fm_le32(p + 4) == FM_LOW &&
++		fm_le32(p + 8) == FM_HIGH;
++}
++
++/* Receive-only allowlist; no diagnostic, reset, calibration or RF TX command. */
++static inline bool fm_command_valid(u16 op, const u8 *p, size_t n)
++{
++	switch (op) {
++	case FM_ENABLE:
++	case FM_DISABLE:
++	case FM_GET_CONFIG:
++	case FM_STATION:
++	case FM_CANCEL:
++		return !n;
++	case FM_SET_CONFIG:
++		return fm_config_valid(p, n);
++	case FM_MUTE:
++		return p && n == 2 && (p[0] == 0 || p[0] == 3) && p[1] == 1;
++	case FM_TUNE:
++		return p && n == 4 && fm_frequency_valid(fm_le32(p));
++	case FM_SEARCH:
++		return p && n == 3 && !p[0] && !p[1] && p[2] <= 1;
++	default:
++		return false;
++	}
++}
++
++enum fm_event_kind { FM_IGNORE, FM_COMPLETE, FM_ACK, FM_TUNED, FM_SEEK_DONE };
++
++struct fm_event {
++	enum fm_event_kind kind;
++	u16 op;
++	u8 status;
++	u8 count;
++	u8 reply[FM_REPLY_MAX];
++};
++
++static inline bool fm_station_valid(const u8 *p, size_t n)
++{
++	return p && n == 12 && fm_frequency_valid(fm_le32(p + 1)) &&
++		p[5] <= 1 && p[7] <= 1 && p[8] <= 1 && p[9] <= 3;
++}
++
++/* Decode/copy in the callback: never retain an RPMSG-owned buffer pointer. */
++static inline bool fm_event_decode(const u8 *p, size_t n, struct fm_event *e)
++{
++	size_t i;
++
++	*e = (struct fm_event){ 0 };
++	if (!p || n < 2 || n != (size_t)p[1] + 2)
++		return false;
++	switch (p[0]) {
++	case 0x0f:
++		if (n < 6)
++			return false;
++		e->op = (u16)p[3] | (u16)p[4] << 8;
++		if (e->op == FM_GET_CONFIG) {
++			if (!((n == 6 && p[5]) ||
++			      (n == 18 && !p[5] && fm_config_valid(p + 6, 12))))
++				return false;
++		} else if (e->op == FM_STATION) {
++			if (n != 17 || !fm_station_valid(p + 5, 12))
++				return false;
++		} else if (n != 6) {
++			/* Larger replies to unrelated commands are not our responses. */
++			return true;
++		}
++		e->kind = FM_COMPLETE;
++		e->status = e->op == FM_STATION ? 0 : p[5];
++		e->count = n - 5;
++		for (i = 0; i < e->count; i++)
++			e->reply[i] = p[i + 5];
++		break;
++	case 0x10:
++		if (n != 6)
++			return false;
++		e->kind = FM_ACK;
++		e->status = p[2];
++		e->op = (u16)p[4] | (u16)p[5] << 8;
++		break;
++	case 0x01:
++		if (!fm_station_valid(p + 2, n - 2))
++			return false;
++		e->kind = FM_TUNED;
++		e->count = 12;
++		for (i = 0; i < e->count; i++)
++			e->reply[i] = p[i + 2];
++		break;
++	case 0x12:
++		/* Completion notification; payload is not interpreted or exported. */
++		e->kind = FM_SEEK_DONE;
++		break;
++	default:
++		/* Unsupported RDS/telemetry events are intentionally not advertised. */
++		break;
++	}
++	return true;
++}
++
++/* Shared asynchronous ACK/event join. Command state is armed BEFORE sending;
++ * accept either arrival order, never complete on an unrelated opcode/target.
++ */
++struct fm_join {
++	u16 op;
++	u32 target;
++	bool accepted;
++	bool event_seen;
++};
++
++static inline bool fm_join_event(struct fm_join *j, const struct fm_event *e)
++{
++	if ((e->kind == FM_COMPLETE || e->kind == FM_ACK) &&
++	    e->op == j->op && !e->status)
++		j->accepted = true;
++	if (j->op == FM_TUNE && e->kind == FM_TUNED &&
++	    fm_le32(e->reply + 1) == j->target)
++		j->event_seen = true;
++	if (j->op == FM_SEARCH && e->kind == FM_SEEK_DONE)
++		j->event_seen = true;
++	return j->accepted && j->event_seen;
++}
++
++#endif
+diff --git a/drivers/media/radio/qcom-fm-native/radio-qcom-fm.c b/drivers/media/radio/qcom-fm-native/radio-qcom-fm.c
+new file mode 100644
+index 000000000000..3b682baddcba
+--- /dev/null
++++ b/drivers/media/radio/qcom-fm-native/radio-qcom-fm.c
+@@ -0,0 +1,624 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Copyright (C) 2026 Kostiantyn Andriiuk <konstantin@andriyuk.com>
++ * Experimental receive-only APPS_FM / V4L2 bridge for Xiaomi Vince.
++ * Protocol: MiCode vince-n-oss iris-uapi.h, commit
++ * 5551bfa07d4eb194891a2d79504cbb95947ce6c5 (Qualcomm GPL-2.0 ABI).
++ * No Android private ioctls, calibration, firmware downloader or RF TX.
++ */
++#include <linux/completion.h>
++#include <linux/delay.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/pm.h>
++#include <linux/rpmsg.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <media/v4l2-ctrls.h>
++#include <media/v4l2-device.h>
++#include <media/v4l2-fh.h>
++#include <media/v4l2-ioctl.h>
++#include "fm-wire.h"
++
++#define FM_CAPS (V4L2_TUNER_CAP_LOW | V4L2_TUNER_CAP_STEREO | \
++		 V4L2_TUNER_CAP_FREQ_BANDS | V4L2_TUNER_CAP_HWSEEK_WRAP)
++
++struct qcom_fm {
++	struct v4l2_device v4l2;
++	struct video_device video;
++	struct v4l2_ctrl_handler controls;
++	struct rpmsg_device *rpdev;
++	struct rpmsg_endpoint *ept; /* Explicit ownership: destroy before freeing state. */
++	struct mutex lock; /* ioctl, controls, close, remove and PM serialization */
++	spinlock_t rx_lock; /* callback-owned transaction/cached telemetry */
++	struct completion done;
++	bool pending;
++	struct fm_join join;
++	u16 opcode;
++	int result;
++	u8 count;
++	u8 reply[FM_REPLY_MAX];
++	u8 station[12];
++	u8 original[12];
++	u8 config[12];
++	u32 frequency;
++	unsigned int users;
++	bool muted;
++	bool rf_possible;
++	bool saved;
++	bool changed;
++	bool faulted;
++	bool suspended;
++	bool disconnected;
++	bool off_failed;
++};
++
++/* Caller holds lock. First timeout poisons the session: late replies have no
++ * sequence ID. Never let a later transaction reuse an ambiguous response.
++ * Only one best-effort CANCEL / RX-OFF, with distinct opcodes, is allowed.
++ */
++static int fm_command(struct qcom_fm *fm, u16 op, const u8 *p, size_t n)
++{
++	u8 packet[15];
++	unsigned long flags;
++	unsigned long deadline;
++	unsigned int timeout = op == FM_SEARCH ? 12000 : 3000;
++	int ret;
++
++	if (fm->disconnected || !fm->rpdev)
++		return -ENODEV;
++	if (fm->faulted && op != FM_DISABLE && op != FM_CANCEL)
++		return -EIO;
++	if (!fm_command_valid(op, p, n))
++		return -EINVAL;
++	packet[0] = op;
++	packet[1] = op >> 8;
++	packet[2] = n;
++	if (n)
++		memcpy(packet + 3, p, n);
++	reinit_completion(&fm->done);
++	spin_lock_irqsave(&fm->rx_lock, flags);
++	fm->opcode = op;
++	fm->join = (struct fm_join){ .op = op,
++		.target = op == FM_TUNE ? fm_le32(p) : 0 };
++	fm->result = -ETIMEDOUT;
++	fm->count = 0;
++	fm->pending = true;
++	spin_unlock_irqrestore(&fm->rx_lock, flags);
++
++	/* Avoid rpmsg_send's generic 15-second wait; all TX retries bounded here. */
++	deadline = jiffies + msecs_to_jiffies(250);
++	do {
++		ret = rpmsg_trysend(fm->ept, packet, n + 3);
++		if (ret != -ENOMEM && ret != -EAGAIN)
++			break;
++		usleep_range(1000, 2000);
++	} while (time_before(jiffies, deadline));
++	if (!ret && !wait_for_completion_timeout(&fm->done,
++						 msecs_to_jiffies(timeout)))
++		ret = -ETIMEDOUT;
++	spin_lock_irqsave(&fm->rx_lock, flags);
++	if (!ret)
++		ret = fm->result;
++	fm->pending = false;
++	spin_unlock_irqrestore(&fm->rx_lock, flags);
++	if (ret) {
++		fm->faulted = true;
++		dev_err(&fm->rpdev->dev,
++			"FM command %04x failed (%d); session locked, reset before retry\n",
++			op, ret);
++	}
++	return ret;
++}
++
++static int fm_callback(struct rpmsg_device *rpdev, void *data, int len,
++		       void *priv, u32 src)
++{
++	struct qcom_fm *fm = priv;
++	struct fm_event event;
++	unsigned long flags;
++	bool finish = false;
++
++	if (!fm || len < 0 || !fm_event_decode(data, len, &event))
++		return 0;
++	spin_lock_irqsave(&fm->rx_lock, flags);
++	if (!fm->pending)
++		goto out;
++	if (event.kind == FM_TUNED) {
++		if (fm->opcode == FM_SEARCH ||
++		    (fm->opcode == FM_TUNE &&
++		     fm_le32(event.reply + 1) == fm->join.target)) {
++			memcpy(fm->station, event.reply, sizeof(fm->station));
++		}
++	} else if ((event.kind == FM_COMPLETE || event.kind == FM_ACK) &&
++		   event.op == fm->opcode) {
++		if (event.status) {
++			fm->result = -EIO;
++			finish = true;
++		} else if (event.kind == FM_COMPLETE && fm->opcode != FM_TUNE &&
++			   fm->opcode != FM_SEARCH) {
++			fm->result = 0;
++			fm->count = event.count;
++			memcpy(fm->reply, event.reply, event.count);
++			finish = true;
++		}
++	}
++	if (!finish && fm_join_event(&fm->join, &event) &&
++	    (fm->opcode == FM_TUNE || fm->opcode == FM_SEARCH)) {
++		fm->result = 0;
++		finish = true;
++	}
++	if (finish) {
++		fm->pending = false;
++		complete(&fm->done);
++	}
++out:
++	spin_unlock_irqrestore(&fm->rx_lock, flags);
++	return 0;
++}
++
++static int fm_set_config(struct qcom_fm *fm, const u8 *config)
++{
++	int ret = fm_command(fm, FM_SET_CONFIG, config, 12);
++
++	if (!ret)
++		ret = fm_command(fm, FM_GET_CONFIG, NULL, 0);
++	if (!ret && (fm->count != 13 || memcmp(fm->reply + 1, config, 12))) {
++		fm->faulted = true;
++		ret = -EIO;
++	}
++	return ret;
++}
++
++static int fm_stop(struct qcom_fm *fm)
++{
++	int restore = 0, off;
++
++	if (!fm->rf_possible)
++		return 0;
++	if (fm->off_failed)
++		return -EIO; /* Do not reuse a late, ambiguous DISABLE response. */
++	if (fm->saved && fm->changed)
++		restore = fm->faulted ? -EIO : fm_set_config(fm, fm->original);
++	off = fm_command(fm, FM_DISABLE, NULL, 0);
++	fm->off_failed = off != 0;
++	if (!off) {
++		fm->rf_possible = false;
++		fm->saved = false;
++		fm->changed = false;
++		memset(fm->station, 0, sizeof(fm->station));
++	}
++	if (restore || off)
++		dev_err(&fm->rpdev->dev,
++			"FM cleanup unconfirmed: restore=%d off=%d; reboot required\n",
++			restore, off);
++	return restore ? restore : off;
++}
++
++static int fm_start(struct qcom_fm *fm)
++{
++	const u8 muted[] = { 3, 1 };
++	int ret;
++
++	if (fm->disconnected)
++		return -ENODEV;
++	if (fm->suspended)
++		return -EBUSY;
++	if (fm->faulted)
++		return -EIO;
++	if (fm->rf_possible)
++		return 0;
++	fm->rf_possible = true; /* Include an enable attempt with an uncertain ACK. */
++	ret = fm_command(fm, FM_ENABLE, NULL, 0);
++	if (!ret)
++		ret = fm_command(fm, FM_MUTE, muted, sizeof(muted));
++	if (!ret)
++		ret = fm_command(fm, FM_GET_CONFIG, NULL, 0);
++	if (!ret) {
++		memcpy(fm->original, fm->reply + 1, 12);
++		fm->saved = true;
++		/* Preserve stock hlsi, use EU band / spacing / RDS convention. */
++		fm->config[3] = fm->original[3];
++		fm->changed = true;
++		ret = fm_set_config(fm, fm->config);
++	}
++	if (ret)
++		fm_stop(fm);
++	return ret;
++}
++
++static int fm_apply_mute(struct qcom_fm *fm, bool mute)
++{
++	u8 payload[] = { mute ? 3 : 0, 1 };
++
++	return fm_command(fm, FM_MUTE, payload, sizeof(payload));
++}
++
++static int fm_tune(struct qcom_fm *fm, u32 khz)
++{
++	u8 payload[4];
++	int ret = fm_start(fm);
++
++	if (!ret) {
++		fm_put32(payload, khz);
++		ret = fm_command(fm, FM_TUNE, payload, sizeof(payload));
++	}
++	if (!ret) {
++		fm->frequency = khz;
++		ret = fm_apply_mute(fm, fm->muted);
++	}
++	if (ret)
++		fm_stop(fm);
++	return ret;
++}
++
++static int fm_control(struct v4l2_ctrl *ctrl)
++{
++	struct qcom_fm *fm = container_of(ctrl->handler, struct qcom_fm, controls);
++	u8 config[12];
++	int ret;
++
++	if (fm->disconnected)
++		return -ENODEV;
++	if (ctrl->id == V4L2_CID_AUDIO_MUTE) {
++		if (!ctrl->val) {
++			/* Standard client may only set frequency before unmuting. */
++			ret = fm_tune(fm, fm->frequency);
++			if (!ret)
++				ret = fm_apply_mute(fm, false);
++		} else {
++			ret = fm->rf_possible ? fm_apply_mute(fm, true) : 0;
++		}
++		if (!ret)
++			fm->muted = ctrl->val;
++		else
++			fm_stop(fm);
++		return ret;
++	}
++	if (ctrl->id != V4L2_CID_TUNE_DEEMPHASIS)
++		return -EINVAL;
++	memcpy(config, fm->config, 12);
++	config[0] = ctrl->val == V4L2_DEEMPHASIS_50_uS ? 1 : 0;
++	ret = fm->rf_possible ? fm_set_config(fm, config) : 0;
++	if (!ret)
++		memcpy(fm->config, config, 12);
++	else
++		fm_stop(fm);
++	return ret;
++}
++
++static const struct v4l2_ctrl_ops fm_control_ops = { .s_ctrl = fm_control };
++
++static int fm_querycap(struct file *file, void *priv, struct v4l2_capability *cap)
++{
++	strscpy(cap->driver, "radio-qcom-fm", sizeof(cap->driver));
++	strscpy(cap->card, "Vince WCNSS FM receiver", sizeof(cap->card));
++	strscpy(cap->bus_info, "platform:APPS_FM", sizeof(cap->bus_info));
++	return 0;
++}
++
++static int fm_get_tuner(struct file *file, void *priv, struct v4l2_tuner *tuner)
++{
++	struct qcom_fm *fm = video_drvdata(file);
++	unsigned long flags;
++	u8 station[12];
++	int ret;
++
++	if (tuner->index)
++		return -EINVAL;
++	if (fm->rf_possible) {
++		ret = fm_command(fm, FM_STATION, NULL, 0);
++		if (ret) {
++			fm_stop(fm);
++			return ret;
++		}
++		spin_lock_irqsave(&fm->rx_lock, flags);
++		memcpy(fm->station, fm->reply, 12);
++		spin_unlock_irqrestore(&fm->rx_lock, flags);
++	}
++	spin_lock_irqsave(&fm->rx_lock, flags);
++	memcpy(station, fm->station, 12);
++	spin_unlock_irqrestore(&fm->rx_lock, flags);
++	strscpy(tuner->name, "FM", sizeof(tuner->name));
++	tuner->type = V4L2_TUNER_RADIO;
++	tuner->capability = FM_CAPS;
++	tuner->rangelow = FM_LOW * 16;
++	tuner->rangehigh = FM_HIGH * 16;
++	tuner->rxsubchans = station[7] ? V4L2_TUNER_SUB_STEREO : V4L2_TUNER_SUB_MONO;
++	tuner->audmode = V4L2_TUNER_MODE_STEREO;
++	/* Service detection, not a calibrated RSSI/percentage conversion. */
++	tuner->signal = station[5] ? 0xffff : 0;
++	tuner->afc = 0;
++	return 0;
++}
++
++static int fm_set_tuner(struct file *file, void *priv, const struct v4l2_tuner *t)
++{
++	if (t->index)
++		return -EINVAL;
++	/* Firmware blend/stereo settings left at stock; don't promise forced mono. */
++	return t->audmode == V4L2_TUNER_MODE_STEREO ? 0 : -EOPNOTSUPP;
++}
++
++static int fm_get_frequency(struct file *file, void *priv, struct v4l2_frequency *f)
++{
++	struct qcom_fm *fm = video_drvdata(file);
++
++	if (f->tuner)
++		return -EINVAL;
++	f->type = V4L2_TUNER_RADIO;
++	f->frequency = fm->frequency * 16; /* Standard LOW units: 62.5 Hz. */
++	return 0;
++}
++
++static int fm_set_frequency(struct file *file, void *priv,
++			    const struct v4l2_frequency *f)
++{
++	struct qcom_fm *fm = video_drvdata(file);
++
++	if (f->tuner || f->type != V4L2_TUNER_RADIO || f->frequency % 16 ||
++	    !fm_frequency_valid(f->frequency / 16))
++		return -EINVAL;
++	return fm_tune(fm, f->frequency / 16);
++}
++
++static int fm_enum_bands(struct file *file, void *priv, struct v4l2_frequency_band *b)
++{
++	if (b->tuner || b->index || b->type != V4L2_TUNER_RADIO)
++		return -EINVAL;
++	b->capability = FM_CAPS;
++	b->rangelow = FM_LOW * 16;
++	b->rangehigh = FM_HIGH * 16;
++	b->modulation = V4L2_BAND_MODULATION_FM;
++	return 0;
++}
++
++static int fm_seek(struct file *file, void *priv, const struct v4l2_hw_freq_seek *s)
++{
++	struct qcom_fm *fm = video_drvdata(file);
++	u8 config[12], request[] = { 0, 0, s->seek_upward ? 0 : 1 };
++	int ret;
++
++	if (s->tuner || s->type != V4L2_TUNER_RADIO)
++		return -EINVAL;
++	if (file->f_flags & O_NONBLOCK)
++		return -EWOULDBLOCK;
++	/* Firmware SEEK wraps; unsupported bounded/sub-band requests must fail. */
++	if (!s->wrap_around)
++		return -EOPNOTSUPP;
++	if ((s->rangelow && s->rangelow != FM_LOW * 16) ||
++	    (s->rangehigh && s->rangehigh != FM_HIGH * 16))
++		return -EINVAL;
++	if (s->spacing && s->spacing != 50000 && s->spacing != 100000 &&
++	    s->spacing != 200000)
++		return -EINVAL;
++	ret = fm_tune(fm, fm->frequency);
++	if (ret)
++		return ret;
++	memcpy(config, fm->config, 12);
++	if (s->spacing)
++		config[1] = s->spacing == 200000 ? 0 : s->spacing == 100000 ? 1 : 2;
++	ret = fm_set_config(fm, config);
++	if (!ret) {
++		memcpy(fm->config, config, 12);
++		ret = fm_command(fm, FM_SEARCH, request, sizeof(request));
++	}
++	if (ret) {
++		/* No subsequent search/tune after error; one bounded cancellation. */
++		fm_command(fm, FM_CANCEL, NULL, 0);
++		fm_stop(fm);
++		return ret;
++	}
++	ret = fm_command(fm, FM_STATION, NULL, 0);
++	if (!ret) {
++		fm->frequency = fm_le32(fm->reply + 1);
++		memcpy(fm->station, fm->reply, 12);
++		if (!fm->reply[5])
++			ret = -ENODATA;
++	} else {
++		fm_stop(fm);
++	}
++	return ret;
++}
++
++static const struct v4l2_ioctl_ops fm_ioctl_ops = {
++	.vidioc_querycap = fm_querycap,
++	.vidioc_g_tuner = fm_get_tuner,
++	.vidioc_s_tuner = fm_set_tuner,
++	.vidioc_g_frequency = fm_get_frequency,
++	.vidioc_s_frequency = fm_set_frequency,
++	.vidioc_enum_freq_bands = fm_enum_bands,
++	.vidioc_s_hw_freq_seek = fm_seek,
++};
++
++static int fm_open(struct file *file)
++{
++	struct qcom_fm *fm = video_drvdata(file);
++	int ret;
++
++	mutex_lock(&fm->lock);
++	if (fm->disconnected) {
++		ret = -ENODEV;
++	} else {
++		ret = v4l2_fh_open(file);
++		if (!ret)
++			fm->users++;
++	}
++	mutex_unlock(&fm->lock);
++	return ret; /* Opening and capability queries never enable RF. */
++}
++
++static int fm_close(struct file *file)
++{
++	struct qcom_fm *fm = video_drvdata(file);
++
++	mutex_lock(&fm->lock);
++	if (!--fm->users && !fm->disconnected) {
++		if (!fm_stop(fm)) {
++			fm->muted = true;
++			__v4l2_ctrl_s_ctrl(v4l2_ctrl_find(&fm->controls,
++						V4L2_CID_AUDIO_MUTE), 1);
++		}
++	}
++	v4l2_fh_release(file);
++	mutex_unlock(&fm->lock);
++	return 0;
++}
++
++static const struct v4l2_file_operations fm_file_ops = {
++	.owner = THIS_MODULE,
++	.open = fm_open,
++	.release = fm_close,
++	.unlocked_ioctl = video_ioctl2,
++};
++
++static void fm_free(struct v4l2_device *v4l2)
++{
++	struct qcom_fm *fm = container_of(v4l2, struct qcom_fm, v4l2);
++
++	v4l2_ctrl_handler_free(&fm->controls);
++	v4l2_device_unregister(v4l2);
++	kfree(fm);
++}
++
++static int fm_probe(struct rpmsg_device *rpdev)
++{
++	struct rpmsg_channel_info chinfo = { .src = RPMSG_ADDR_ANY, .dst = RPMSG_ADDR_ANY };
++	struct device *parent;
++	struct qcom_fm *fm;
++	int ret;
++
++	if (!of_machine_is_compatible("xiaomi,vince"))
++		return -ENODEV;
++	for (parent = rpdev->dev.parent; parent; parent = parent->parent)
++		if (of_device_is_compatible(parent->of_node, "qcom,pronto-v3-pil"))
++			break;
++	if (!parent)
++		return -ENODEV; /* Never bind an APPS_FM channel on a different remoteproc. */
++	/* RPMSG core remove does not clear its old default ept pointer after unbind.
++	 * This callback-less driver owns its explicit endpoint, not rpdev->ept.
++	 */
++	rpdev->ept = NULL;
++	fm = kzalloc(sizeof(*fm), GFP_KERNEL);
++	if (!fm)
++		return -ENOMEM;
++	mutex_init(&fm->lock);
++	spin_lock_init(&fm->rx_lock);
++	init_completion(&fm->done);
++	fm->rpdev = rpdev;
++	fm->frequency = FM_LOW;
++	fm->muted = true;
++	fm->config[0] = 1;
++	fm->config[1] = 1;
++	fm->config[2] = 1;
++	fm_put32(fm->config + 4, FM_LOW);
++	fm_put32(fm->config + 8, FM_HIGH);
++	ret = v4l2_device_register(&rpdev->dev, &fm->v4l2);
++	if (ret)
++		goto free;
++	fm->v4l2.release = fm_free;
++	v4l2_ctrl_handler_init(&fm->controls, 2);
++	fm->controls.lock = &fm->lock;
++	v4l2_ctrl_new_std(&fm->controls, &fm_control_ops, V4L2_CID_AUDIO_MUTE, 0, 1, 1, 1);
++	v4l2_ctrl_new_std_menu(&fm->controls, &fm_control_ops,
++		V4L2_CID_TUNE_DEEMPHASIS, V4L2_DEEMPHASIS_75_uS,
++		BIT(V4L2_DEEMPHASIS_DISABLED), V4L2_DEEMPHASIS_50_uS);
++	ret = fm->controls.error;
++	if (ret)
++		goto put;
++	strscpy(chinfo.name, "APPS_FM", sizeof(chinfo.name));
++	fm->ept = rpmsg_create_ept(rpdev, fm_callback, fm, chinfo);
++	if (!fm->ept) {
++		ret = -EBUSY;
++		goto put;
++	}
++	strscpy(fm->video.name, "Vince FM", sizeof(fm->video.name));
++	fm->video.v4l2_dev = &fm->v4l2;
++	fm->video.ctrl_handler = &fm->controls;
++	fm->video.fops = &fm_file_ops;
++	fm->video.ioctl_ops = &fm_ioctl_ops;
++	fm->video.release = video_device_release_empty;
++	fm->video.lock = &fm->lock;
++	fm->video.device_caps = V4L2_CAP_RADIO | V4L2_CAP_TUNER | V4L2_CAP_HW_FREQ_SEEK;
++	video_set_drvdata(&fm->video, fm);
++	/* RPMSG core must not own another default endpoint for this driver. */
++	dev_set_drvdata(&rpdev->dev, fm);
++	ret = video_register_device(&fm->video, VFL_TYPE_RADIO, -1);
++	if (ret)
++		goto put;
++	dev_info(&rpdev->dev, "native receive-only %s registered; no RF commands issued\n",
++		 video_device_node_name(&fm->video));
++	return 0;
++put:
++	if (fm->ept)
++		rpmsg_destroy_ept(fm->ept);
++	dev_set_drvdata(&rpdev->dev, NULL);
++	v4l2_device_put(&fm->v4l2);
++	return ret;
++free:
++	kfree(fm);
++	return ret;
++}
++
++static void fm_remove(struct rpmsg_device *rpdev)
++{
++	struct qcom_fm *fm = dev_get_drvdata(&rpdev->dev);
++
++	mutex_lock(&fm->lock);
++	fm_stop(fm); /* Endpoint still exists while driver's remove runs. */
++	/* QCOM SMD close clears its callback under recv_lock and waits for readers. */
++	rpmsg_destroy_ept(fm->ept);
++	fm->ept = NULL;
++	fm->disconnected = true;
++	fm->rpdev = NULL;
++	video_unregister_device(&fm->video);
++	v4l2_device_disconnect(&fm->v4l2);
++	dev_set_drvdata(&rpdev->dev, NULL);
++	mutex_unlock(&fm->lock);
++	v4l2_device_put(&fm->v4l2);
++}
++
++static int fm_suspend(struct device *dev)
++{
++	struct qcom_fm *fm = dev_get_drvdata(dev);
++	int ret;
++
++	mutex_lock(&fm->lock);
++	ret = fm_stop(fm);
++	if (!ret) {
++		fm->suspended = true;
++		fm->muted = true;
++		__v4l2_ctrl_s_ctrl(v4l2_ctrl_find(&fm->controls, V4L2_CID_AUDIO_MUTE), 1);
++	}
++	mutex_unlock(&fm->lock);
++	return ret;
++}
++
++static int fm_resume(struct device *dev)
++{
++	struct qcom_fm *fm = dev_get_drvdata(dev);
++
++	mutex_lock(&fm->lock);
++	fm->suspended = false;
++	mutex_unlock(&fm->lock);
++	/* RF stays off; application must tune/unmute explicitly after resume. */
++	return 0;
++}
++
++static DEFINE_SIMPLE_DEV_PM_OPS(fm_pm_ops, fm_suspend, fm_resume);
++static const struct rpmsg_device_id fm_ids[] = { { .name = "APPS_FM" }, { } };
++MODULE_DEVICE_TABLE(rpmsg, fm_ids);
++
++static struct rpmsg_driver fm_driver = {
++	.drv = { .name = "radio-qcom-fm", .pm = pm_sleep_ptr(&fm_pm_ops) },
++	.id_table = fm_ids,
++	.probe = fm_probe,
++	.remove = fm_remove,
++};
++module_rpmsg_driver(fm_driver);
++
++MODULE_AUTHOR("Kostiantyn Andriiuk <konstantin@andriyuk.com>");
++MODULE_DESCRIPTION("Experimental Vince receive-only WCNSS FM V4L2 bridge");
++MODULE_LICENSE("GPL");
++MODULE_VERSION("0.1");
+diff --git a/drivers/media/radio/qcom-fm-native/test-wire.c b/drivers/media/radio/qcom-fm-native/test-wire.c
+new file mode 100644
+index 000000000000..5fa71eaad493
+--- /dev/null
++++ b/drivers/media/radio/qcom-fm-native/test-wire.c
+@@ -0,0 +1,82 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#include <assert.h>
++#include <stdio.h>
++#include <string.h>
++#include "fm-wire.h"
++
++int main(void)
++{
++	const u8 cc[] = { 0x0f, 4, 1, 2, 0x4c, 0 };
++	const u8 ack[] = { 0x10, 4, 0, 1, 1, 0x54 };
++	u8 config[] = { 0x0f, 16, 1, 3, 0x4c, 0,
++		1, 1, 1, 0, 0xcc, 0x55, 1, 0, 0xe0, 0xa5, 1, 0 };
++	u8 station[] = { 0x0f, 15, 1, 0x0a, 0x4c,
++		0, 0x14, 0x95, 1, 0, 1, 0xd8, 1, 0, 0, 4, 0 };
++	u8 tune[] = { 1, 12, 0, 0x14, 0x95, 1, 0, 1, 0xd8, 1, 0, 0, 4, 0 };
++	u8 mute[] = { 3, 1 }, seek[] = { 0, 0, 0 }, freq[4];
++	u8 done[] = { 0x12, 0 };
++	u8 junk[258];
++	struct fm_event e;
++	struct fm_join join;
++	struct fm_event accepted, tuned, finished;
++
++	assert(fm_event_decode(cc, sizeof(cc), &e) && e.kind == FM_COMPLETE);
++	assert(e.op == FM_DISABLE && !e.status && e.count == 1);
++	assert(fm_event_decode(ack, sizeof(ack), &e) && e.kind == FM_ACK);
++	assert(e.op == FM_TUNE);
++	assert(fm_event_decode(config, sizeof(config), &e) && e.count == 13);
++	assert(fm_event_decode(station, sizeof(station), &e) && e.count == 12);
++	assert(fm_event_decode(tune, sizeof(tune), &e) && e.kind == FM_TUNED);
++	assert(fm_event_decode(done, sizeof(done), &e) && e.kind == FM_SEEK_DONE);
++	assert(fm_event_decode(ack, sizeof(ack), &accepted));
++	assert(fm_event_decode(tune, sizeof(tune), &tuned));
++	assert(fm_event_decode(done, sizeof(done), &finished));
++	join = (struct fm_join){ .op = FM_TUNE, .target = 103700 };
++	assert(!fm_join_event(&join, &accepted));
++	assert(fm_join_event(&join, &tuned));
++	join = (struct fm_join){ .op = FM_TUNE, .target = 103700 };
++	assert(!fm_join_event(&join, &tuned));
++	assert(fm_join_event(&join, &accepted));
++	join = (struct fm_join){ .op = FM_TUNE, .target = 100800 };
++	assert(!fm_join_event(&join, &accepted));
++	assert(!fm_join_event(&join, &tuned));
++	join = (struct fm_join){ .op = FM_SEARCH };
++	assert(!fm_join_event(&join, &finished));
++	assert(!fm_join_event(&join, &accepted)); /* Wrong opcode cannot join. */
++	accepted.op = FM_SEARCH;
++	accepted.status = 1;
++	assert(!fm_join_event(&join, &accepted));
++	accepted.status = 0;
++	assert(fm_join_event(&join, &accepted));
++	for (size_t n = 0; n < sizeof(config); n++)
++		assert(!fm_event_decode(config, n, &e));
++	config[6] = 2;
++	assert(!fm_event_decode(config, sizeof(config), &e));
++	station[10] = 2;
++	assert(!fm_event_decode(station, sizeof(station), &e));
++	assert(fm_command_valid(FM_MUTE, mute, sizeof(mute)));
++	mute[0] = 2;
++	assert(!fm_command_valid(FM_MUTE, mute, sizeof(mute)));
++	assert(fm_command_valid(FM_SEARCH, seek, sizeof(seek)));
++	seek[2] = 2;
++	assert(!fm_command_valid(FM_SEARCH, seek, sizeof(seek)));
++	fm_put32(freq, 103700);
++	assert(fm_command_valid(FM_TUNE, freq, 4));
++	fm_put32(freq, 103701);
++	assert(!fm_command_valid(FM_TUNE, freq, 4));
++	assert(!fm_frequency_valid(FM_LOW - 50) && !fm_frequency_valid(FM_HIGH + 50));
++	assert(!fm_command_valid(0x5001, NULL, 0)); /* RF TX */
++	assert(!fm_command_valid(0x5404, NULL, 0)); /* reset */
++	assert(!fm_command_valid(0x5405, NULL, 0));
++	/* Exhaust malformed envelopes and event lengths under sanitizers. */
++	for (unsigned event = 0; event < 256; event++) {
++		for (size_t n = 0; n <= sizeof(junk); n++) {
++			memset(junk, 0xa5, sizeof(junk));
++			junk[0] = event;
++			junk[1] = n >= 2 ? n - 2 : 0;
++			(void)fm_event_decode(junk, n, &e);
++		}
++	}
++	puts("PASS: shared wire decoder / RX allowlist / malformed frames / ACK-event join");
++	return 0;
++}

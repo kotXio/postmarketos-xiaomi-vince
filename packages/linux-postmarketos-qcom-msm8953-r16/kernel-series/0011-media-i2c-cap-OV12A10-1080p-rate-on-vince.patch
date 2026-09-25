@@ -1,0 +1,27 @@
+From ac3f40d0981be386ed8d84794c6c253eff2e55ba Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Tue, 1 Sep 2026 17:09:32 +0300
+Subject: [PATCH 11/42] media: i2c: cap OV12A10 1080p rate on vince
+
+---
+ drivers/media/i2c/ov12a10.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/i2c/ov12a10.c b/drivers/media/i2c/ov12a10.c
+index 8dae253fc2e3..106b5230e7f4 100644
+--- a/drivers/media/i2c/ov12a10.c
++++ b/drivers/media/i2c/ov12a10.c
+@@ -591,11 +591,11 @@ static const struct ov12a10_mode ov12a10_modes[] = {
+ 		.vt_pixel_clk = 108000000,
+ 		.pixel_rate = OV12A10_PIXEL_RATE,
+ 		.hts = 4610,
+-		.vts_min = 1128,
++		.vts_min = 1354,
+ 		.vts_def = 3383,
+ 		.vts_max = 13533,
+ 		.binning = 2,
+-		.max_fps_milli = 90000,
++		.max_fps_milli = 75000,
+ 	},
+ 	{
+ 		.width = 1280,

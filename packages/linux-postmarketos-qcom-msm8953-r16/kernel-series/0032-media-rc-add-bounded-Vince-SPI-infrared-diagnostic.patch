@@ -1,0 +1,323 @@
+From 78b2acce66392c7fc8e4a59777d227c4127b4b4b Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sat, 12 Sep 2026 18:55:16 +0300
+Subject: [PATCH 32/42] media: rc: add bounded Vince SPI infrared diagnostic
+
+---
+ .../bindings/leds/irled/ir-spi-led.yaml       |  23 ++-
+ .../boot/dts/qcom/msm8953-xiaomi-vince.dts    |   8 +
+ drivers/media/rc/ir-spi.c                     | 166 +++++++++++++++++-
+ 3 files changed, 188 insertions(+), 9 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/leds/irled/ir-spi-led.yaml b/Documentation/devicetree/bindings/leds/irled/ir-spi-led.yaml
+index 72cadebf6e3e..835a84d0b797 100644
+--- a/Documentation/devicetree/bindings/leds/irled/ir-spi-led.yaml
++++ b/Documentation/devicetree/bindings/leds/irled/ir-spi-led.yaml
+@@ -15,17 +15,36 @@ description:
+ 
+ allOf:
+   - $ref: /schemas/spi/spi-peripheral-props.yaml#
++  - if:
++      properties:
++        compatible:
++          contains:
++            const: xiaomi,vince-ir-spi
++    then:
++      properties:
++        duty-cycle:
++          const: 30
++        led-active-low: false
++        spi-max-frequency:
++          maximum: 960000
++      required:
++        - power-supply
++        - duty-cycle
+ 
+ properties:
+   compatible:
+-    const: ir-spi-led
++    oneOf:
++      - const: ir-spi-led
++      - items:
++          - const: xiaomi,vince-ir-spi
++          - const: ir-spi-led
+ 
+   reg:
+     maxItems: 1
+ 
+   duty-cycle:
+     $ref: /schemas/types.yaml#/definitions/uint8
+-    enum: [50, 60, 70, 75, 80, 90]
++    enum: [30, 50, 60, 70, 75, 80, 90]
+     description:
+       Percentage of one period in which the signal is active.
+ 
+diff --git a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+index 1962bd904f90..6794d481a3da 100644
+--- a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
++++ b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+@@ -363,6 +363,14 @@ codec {
+ 
+ &spi_6 {
+ 	status = "okay";
++
++	irled@0 {
++		compatible = "xiaomi,vince-ir-spi", "ir-spi-led";
++		reg = <0>;
++		spi-max-frequency = <960000>;
++		duty-cycle = /bits/ 8 <30>;
++		power-supply = <&pm8953_l8>;
++	};
+ };
+ 
+ &tlmm {
+diff --git a/drivers/media/rc/ir-spi.c b/drivers/media/rc/ir-spi.c
+index 392441e0c116..60cea569d38c 100644
+--- a/drivers/media/rc/ir-spi.c
++++ b/drivers/media/rc/ir-spi.c
+@@ -3,13 +3,16 @@
+ //
+ // Copyright (c) 2016 Samsung Electronics Co., Ltd.
+ // Copyright (c) Andi Shyti <andi@etezian.org>
++// Copyright (c) 2026 Kostiantyn Andriiuk <konstantin@andriyuk.com>
+ 
+ #include <linux/bits.h>
+ #include <linux/device.h>
+ #include <linux/err.h>
++#include <linux/ktime.h>
+ #include <linux/math.h>
+ #include <linux/mod_devicetable.h>
+ #include <linux/module.h>
++#include <linux/of.h>
+ #include <linux/property.h>
+ #include <linux/regulator/consumer.h>
+ #include <linux/spi/spi.h>
+@@ -23,9 +26,20 @@
+ #define IR_SPI_DEFAULT_FREQUENCY	38000
+ #define IR_SPI_BITS_PER_PULSE		16
+ 
++#define VINCE_IR_MAX_FRAME_US		120000
++#define VINCE_IR_MAX_MARK_US		20000
++#define VINCE_IR_MIN_CARRIER		30000
++#define VINCE_IR_MAX_CARRIER		60000
++#define VINCE_IR_MAX_ATTEMPTS		75
++#define VINCE_IR_IDLE_CYCLES		128
++
+ struct ir_spi_data {
+ 	u32 freq;
+ 	bool negated;
++	bool vince;
++	bool failed;
++	u32 attempts;
++	u64 next_tx_ns;
+ 
+ 	u16 pulse;
+ 	u16 space;
+@@ -35,6 +49,117 @@ struct ir_spi_data {
+ 	struct regulator *regulator;
+ };
+ 
++/*
++ * Diagnostic limits apply only to the opt-in Vince node. rc-core serializes
++ * transmission and carrier/duty changes with rc_dev.lock.
++ */
++static int ir_spi_vince_validate(struct ir_spi_data *idata,
++				const unsigned int *buffer, unsigned int count,
++				u32 *duration)
++{
++	unsigned int i;
++	u32 total = 0;
++
++	if (idata->failed)
++		return -EIO;
++	if (idata->attempts >= VINCE_IR_MAX_ATTEMPTS)
++		return -EOVERFLOW;
++	if (ktime_get_boottime_ns() < idata->next_tx_ns)
++		return -EAGAIN;
++	if (!count || !(count & 1))
++		return -EINVAL;
++	if (idata->freq < VINCE_IR_MIN_CARRIER ||
++	    idata->freq > VINCE_IR_MAX_CARRIER ||
++	    idata->freq > idata->spi->max_speed_hz / IR_SPI_BITS_PER_PULSE)
++		return -EINVAL;
++
++	for (i = 0; i < count; i++) {
++		if (!buffer[i] ||
++		    !DIV_ROUND_CLOSEST_ULL((u64)buffer[i] * idata->freq, 1000000))
++			return -EINVAL;
++		if (!(i & 1) && buffer[i] > VINCE_IR_MAX_MARK_US)
++			return -E2BIG;
++		if (buffer[i] > VINCE_IR_MAX_FRAME_US - total)
++			return -E2BIG;
++		total += buffer[i];
++	}
++
++	*duration = total;
++	return 0;
++}
++
++static int ir_spi_vince_tx(struct ir_spi_data *idata,
++			   const unsigned int *buffer, unsigned int count)
++{
++	struct spi_transfer xfer = { };
++	unsigned int i, j, words, offset;
++	u32 duration;
++	u8 *tx_buf;
++	int ret, off_ret;
++
++	ret = ir_spi_vince_validate(idata, buffer, count, &duration);
++	if (ret)
++		return ret;
++
++	/* A leading 1 ms space and terminal all-zero cycles are inactive. */
++	words = DIV_ROUND_CLOSEST(idata->freq, 1000) + VINCE_IR_IDLE_CYCLES;
++	for (i = 0; i < count; i++)
++		words += DIV_ROUND_CLOSEST_ULL((u64)buffer[i] * idata->freq,
++					      1000000);
++
++	tx_buf = kcalloc(words, 2, GFP_KERNEL);
++	if (!tx_buf)
++		return -ENOMEM;
++
++	offset = DIV_ROUND_CLOSEST(idata->freq, 1000) * 2;
++	for (i = 0; i < count; i++) {
++		u16 value = (i & 1) ? 0 : idata->pulse;
++		u32 cycles = DIV_ROUND_CLOSEST_ULL((u64)buffer[i] * idata->freq,
++						 1000000);
++
++		/* Explicit byte stream, independent of CPU u16 endianness. */
++		for (j = 0; j < cycles; j++) {
++			tx_buf[offset++] = value >> 8;
++			tx_buf[offset++] = value;
++		}
++	}
++
++	xfer.speed_hz = idata->freq * IR_SPI_BITS_PER_PULSE;
++	xfer.bits_per_word = 8;
++	xfer.len = words * 2;
++	xfer.tx_buf = tx_buf;
++
++	idata->attempts++;
++	ret = regulator_enable(idata->regulator);
++	if (ret)
++		goto out;
++
++	ret = spi_sync_transfer(idata->spi, &xfer, 1);
++	/*
++	 * L8 is shared with eMMC. This releases only our vote; it is not a
++	 * hardware LED cutoff. Do not retry a failed transfer or force L8 off.
++	 */
++	off_ret = regulator_disable(idata->regulator);
++	if (!ret)
++		ret = off_ret;
++
++out:
++	idata->next_tx_ns = ktime_get_boottime_ns() + NSEC_PER_SEC;
++	if (ret) {
++		idata->failed = true;
++		dev_err(&idata->spi->dev,
++			"[vince-ir] TX failed %d; further transmissions blocked\n",
++			ret);
++	} else {
++		dev_info(&idata->spi->dev,
++			 "[vince-ir] TX %u: %u us, %u Hz, inactive tail\n",
++			 idata->attempts, duration, idata->freq);
++	}
++	kfree(tx_buf);
++
++	return ret ? ret : (int)count;
++}
++
+ static int ir_spi_tx(struct rc_dev *dev, unsigned int *buffer, unsigned int count)
+ {
+ 	int i;
+@@ -44,6 +169,9 @@ static int ir_spi_tx(struct rc_dev *dev, unsigned int *buffer, unsigned int coun
+ 	struct spi_transfer xfer;
+ 	u16 *tx_buf;
+ 
++	if (idata->vince)
++		return ir_spi_vince_tx(idata, buffer, count);
++
+ 	/* convert the pulse/space signal to raw binary signal */
+ 	for (i = 0; i < count; i++) {
+ 		buffer[i] = DIV_ROUND_CLOSEST_ULL((u64)buffer[i] * idata->freq,
+@@ -97,6 +225,10 @@ static int ir_spi_set_tx_carrier(struct rc_dev *dev, u32 carrier)
+ {
+ 	struct ir_spi_data *idata = dev->priv;
+ 
++	if (idata->vince && (carrier < VINCE_IR_MIN_CARRIER ||
++			     carrier > VINCE_IR_MAX_CARRIER))
++		return -EINVAL;
++
+ 	if (!carrier)
+ 		return -EINVAL;
+ 
+@@ -113,6 +245,9 @@ static int ir_spi_set_duty_cycle(struct rc_dev *dev, u32 duty_cycle)
+ 	struct ir_spi_data *idata = dev->priv;
+ 	int bits = (duty_cycle * 15) / 100;
+ 
++	if (idata->vince && duty_cycle != 30)
++		return -EINVAL;
++
+ 	idata->pulse = GENMASK(bits, 0);
+ 
+ 	if (idata->negated) {
+@@ -136,7 +271,20 @@ static int ir_spi_probe(struct spi_device *spi)
+ 	if (!idata)
+ 		return -ENOMEM;
+ 
+-	idata->regulator = devm_regulator_get(dev, "irda_regulator");
++	idata->vince = of_device_is_compatible(dev->of_node, "xiaomi,vince-ir-spi");
++	if (idata->vince &&
++	    (!of_machine_is_compatible("xiaomi,vince") ||
++	     spi_get_chipselect(spi, 0) ||
++	     spi->mode & (SPI_CPOL | SPI_CPHA | SPI_LSB_FIRST) ||
++	     device_property_read_bool(dev, "led-active-low") ||
++	     !device_property_present(dev, "power-supply")))
++		return -EINVAL;
++
++	/* Honour the binding's real supply; retain legacy-name compatibility. */
++	if (device_property_present(dev, "power-supply"))
++		idata->regulator = devm_regulator_get_optional(dev, "power");
++	else
++		idata->regulator = devm_regulator_get(dev, "irda_regulator");
+ 	if (IS_ERR(idata->regulator))
+ 		return PTR_ERR(idata->regulator);
+ 
+@@ -155,26 +303,30 @@ static int ir_spi_probe(struct spi_device *spi)
+ 	idata->negated = device_property_read_bool(dev, "led-active-low");
+ 	ret = device_property_read_u8(dev, "duty-cycle", &dc);
+ 	if (ret)
+-		dc = 50;
++		dc = idata->vince ? 30 : 50;
+ 
+-	/*
+-	 * ir_spi_set_duty_cycle() cannot fail, it returns int
+-	 * to be compatible with the rc->s_tx_duty_cycle function.
+-	 */
+-	ir_spi_set_duty_cycle(idata->rc, dc);
++	ret = ir_spi_set_duty_cycle(idata->rc, dc);
++	if (ret)
++		return ret;
+ 
+ 	idata->freq = IR_SPI_DEFAULT_FREQUENCY;
+ 
++	if (idata->vince)
++		dev_info(dev,
++			 "[vince-ir] ready, no auto TX; 120 ms frame, 20 ms mark, 1 s gap, 75 attempts\n");
++
+ 	return devm_rc_register_device(dev, idata->rc);
+ }
+ 
+ static const struct of_device_id ir_spi_of_match[] = {
++	{ .compatible = "xiaomi,vince-ir-spi" },
+ 	{ .compatible = "ir-spi-led" },
+ 	{}
+ };
+ MODULE_DEVICE_TABLE(of, ir_spi_of_match);
+ 
+ static const struct spi_device_id ir_spi_ids[] = {
++	{ "vince-ir-spi" },
+ 	{ "ir-spi-led" },
+ 	{}
+ };

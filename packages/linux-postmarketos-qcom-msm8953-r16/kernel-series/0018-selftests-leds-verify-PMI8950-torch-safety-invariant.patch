@@ -1,0 +1,306 @@
+From 4089fec47386c7ecc230062b5f9fe00d99dcbf15 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sat, 5 Sep 2026 13:14:08 +0300
+Subject: [PATCH 18/42] selftests: leds: verify PMI8950 torch safety invariants
+
+---
+ scripts/check-pmi8950-torch.py | 290 +++++++++++++++++++++++++++++++++
+ 1 file changed, 290 insertions(+)
+ create mode 100755 scripts/check-pmi8950-torch.py
+
+diff --git a/scripts/check-pmi8950-torch.py b/scripts/check-pmi8950-torch.py
+new file mode 100755
+index 000000000000..85c900fe76bd
+--- /dev/null
++++ b/scripts/check-pmi8950-torch.py
+@@ -0,0 +1,290 @@
++#!/usr/bin/env python3
++# SPDX-License-Identifier: GPL-2.0-only
++"""Check safety invariants of the bounded PMI8950 diagnostic torch."""
++
++from __future__ import annotations
++
++import re
++import sys
++from pathlib import Path
++
++
++class CheckFailure(RuntimeError):
++    """Raised when a required safety invariant is absent."""
++
++
++def require(condition: bool, message: str) -> None:
++    if not condition:
++        raise CheckFailure(message)
++
++
++def function_body(source: str, name: str) -> str:
++    marker = re.search(rf"\b{re.escape(name)}\s*\(", source)
++    require(marker is not None, f"function {name} is missing")
++    opening = source.find("{", marker.end())
++    semicolon = source.find(";", marker.end(), opening)
++    require(opening >= 0 and semicolon < 0,
++            f"cannot parse function {name}")
++
++    depth = 0
++    for index in range(opening, len(source)):
++        if source[index] == "{":
++            depth += 1
++        elif source[index] == "}":
++            depth -= 1
++            if depth == 0:
++                return source[opening + 1:index]
++
++    raise CheckFailure(f"unterminated function {name}")
++
++
++def initializer(source: str, name: str) -> str:
++    marker = re.search(rf"\b{re.escape(name)}\b[^=]*=\s*\{{", source)
++    require(marker is not None, f"initializer {name} is missing")
++    opening = source.find("{", marker.start())
++    closing = source.find("};", opening)
++    require(closing >= 0, f"cannot parse initializer {name}")
++    return source[opening + 1:closing]
++
++
++def constant(source: str, name: str) -> int:
++    match = re.search(rf"^#define\s+{re.escape(name)}\s+(\S+)", source,
++                      re.MULTILINE)
++    require(match is not None, f"constant {name} is missing")
++    try:
++        return int(match.group(1), 0)
++    except ValueError as error:
++        raise CheckFailure(f"constant {name} is not a literal integer") from error
++
++
++def ordered(label: str, source: str, needles: list[str]) -> None:
++    cursor = 0
++    for needle in needles:
++        position = source.find(needle, cursor)
++        require(position >= 0, f"{label}: missing or reordered {needle}")
++        cursor = position + len(needle)
++
++
++def check_constants(driver: str) -> None:
++    expected = {
++        "PMI8950_TORCH_CHANNELS": 2,
++        "PMI8950_TORCH_TIMEOUT_MS": 500,
++        "PMI8950_FLASH_MIN_CURRENT_CODE": 0,
++        "PMI8950_FLASH_TORCH_MAX_CODE": 0x0F,
++        "PMI8950_FLASH_IDLE_MAX_CODE": 0x4F,
++        "PMI8950_FLASH_MODULE_DISABLED": 0x60,
++        "PMI8950_FLASH_MODULE_ENABLED": 0x80,
++        "PMI8950_TORCH_RAMP_DOWN_MIN_US": 2160,
++        "PMI8950_TORCH_RAMP_DOWN_MAX_US": 2161,
++    }
++    for name, wanted in expected.items():
++        actual = constant(driver, name)
++        require(actual == wanted, f"{name}: expected {wanted:#x}, got {actual:#x}")
++
++
++def check_public_surface(driver: str) -> None:
++    names_block = initializer(driver, "pmi8950_torch_names")
++    names = re.findall(r'"([^"]+)"', names_block)
++    require(names == ["pmi8950:diagnostic-channel0",
++                      "pmi8950:diagnostic-channel1"],
++            f"unexpected diagnostic LED names: {names}")
++    for name in names:
++        require(not name.endswith((":torch", ":flash")),
++                f"diagnostic LED {name} would be discovered by Plasma")
++
++    probe = function_body(driver, "pmi8950_torch_probe")
++    require("cdev->max_brightness = 1;" in probe,
++            "diagnostic max_brightness is not one")
++    brightness_get = function_body(driver, "pmi8950_torch_brightness_get")
++    require("? 1 : LED_OFF" in brightness_get,
++            "brightness_get does not match max_brightness")
++    lowered = driver.lower()
++    for forbidden in ("led_classdev_flash", "v4l2_flash", "v4l2-flash"):
++        require(forbidden not in lowered,
++                f"photo-flash integration appeared: {forbidden}")
++
++
++def check_channel_selection(driver: str) -> None:
++    strobe = function_body(driver, "pmi8950_torch_strobe_bit")
++    require("return BIT(7 - channel);" in strobe,
++            "channel strobe mapping is not ch0=BIT(7), ch1=BIT(6)")
++
++    current = function_body(driver, "pmi8950_torch_current_reg")
++    ordered("current register mapping", current,
++            ["channel ? PMI8950_FLASH_LED1_CURRENT_REG",
++             "PMI8950_FLASH_LED0_CURRENT_REG"])
++    headroom = function_body(driver, "pmi8950_torch_headroom_reg")
++    ordered("headroom register mapping", headroom,
++            ["channel ? PMI8950_FLASH_HEADROOM_SENSE1_REG",
++             "PMI8950_FLASH_HEADROOM_SENSE0_REG"])
++
++    enable = function_body(driver, "pmi8950_torch_enable_locked")
++    require("unsigned int other = channel->id ^ 1;" in enable,
++            "other-channel selection changed")
++    ordered("single-channel exclusion", enable,
++            ["if (torch->channel[other].enabled)", "return -EBUSY;"])
++    ordered("non-extendable timeout", enable,
++            ["if (channel->enabled)", "return 0;",
++             "schedule_delayed_work(&channel->timeout_work",
++             "msecs_to_jiffies(PMI8950_TORCH_TIMEOUT_MS)"])
++    require("mod_delayed_work" not in enable,
++            "enable path can extend an existing timeout")
++
++
++def check_enable_and_fail_closed(driver: str) -> None:
++    enable = function_body(driver, "pmi8950_torch_enable_locked")
++    ordered("enable sequence", enable,
++            ["pmi8950_torch_read_fault_locked",
++             "pmi8950_torch_write_protections_locked",
++             "PMI8950_FLASH_TORCH_MODE_REG",
++             "PMI8950_FLASH_MIN_CURRENT_CODE",
++             "PMI8950_FLASH_MAX_CURRENT_REG",
++             "PMI8950_FLASH_TORCH_MAX_CODE",
++             "PMI8950_FLASH_MODULE_ENABLE_REG",
++             "pmi8950_torch_headroom_reg(channel->id)",
++             "PMI8950_FLASH_STROBE_REG",
++             "channel->enabled = true",
++             "schedule_delayed_work"])
++    fail_closed = enable[enable.find("fail_closed:"):]
++    ordered("enable failure cleanup", fail_closed,
++            ["torch->locked_out = true;",
++             "pmi8950_torch_force_off_locked(torch)"])
++
++    read_fault = function_body(driver, "pmi8950_torch_read_fault_locked")
++    require(read_fault.count("torch->locked_out = true;") >= 2,
++            "read errors or live faults no longer lock out the controller")
++
++
++def check_force_off(driver: str) -> None:
++    force_off = function_body(driver, "pmi8950_torch_force_off_locked")
++    ordered("global forced-off sequence", force_off,
++            ["PMI8950_FLASH_STROBE_REG",
++             "PMI8950_FLASH_STROBE_MASK, 0",
++             "usleep_range(PMI8950_TORCH_RAMP_DOWN_MIN_US",
++             "for (i = 0; i < PMI8950_TORCH_CHANNELS; i++)",
++             "pmi8950_torch_headroom_reg(i)",
++             "PMI8950_FLASH_HEADROOM_SENSE_DISABLED",
++             "pmi8950_torch_current_reg(i)",
++             "PMI8950_FLASH_CURRENT_MASK, 0",
++             "torch->channel[i].enabled = false",
++             "PMI8950_FLASH_SECURE_ACCESS_REG",
++             "PMI8950_FLASH_TORCH_MODE_REG",
++             "PMI8950_FLASH_TORCH_DISABLED",
++             "PMI8950_FLASH_MODULE_ENABLE_REG",
++             "PMI8950_FLASH_MODULE_DISABLED",
++             "PMI8950_FLASH_MAX_CURRENT_REG",
++             "PMI8950_FLASH_IDLE_MAX_CODE",
++             "pmi8950_torch_read_fault_locked"])
++    require(len(re.findall(r"\breturn\b", force_off)) == 1,
++            "force-off acquired an early return")
++    require(force_off.count("pmi8950_torch_keep_first_error") >= 7,
++            "force-off no longer preserves errors while attempting all disables")
++    require("if (first_error)\n\t\ttorch->locked_out = true;" in force_off,
++            "force-off errors no longer lock out the controller")
++
++    disable = function_body(driver, "pmi8950_torch_disable_locked")
++    require(disable.count("pmi8950_torch_force_off_locked(torch)") >= 2,
++            "explicit/error off paths no longer retry global force-off")
++    ordered("disable failure cleanup", disable,
++            ["torch->locked_out = true;",
++             "pmi8950_torch_force_off_locked(torch)"])
++
++
++def check_timeout_and_lifecycle(driver: str) -> None:
++    timeout = function_body(driver, "pmi8950_torch_timeout_work")
++    require("pmi8950_torch_disable_locked(channel)" in timeout,
++            "timeout work no longer disables its channel")
++
++    brightness_set = function_body(driver, "pmi8950_torch_brightness_set")
++    ordered("explicit off", brightness_set,
++            ["if (brightness == LED_OFF)",
++             "cancel_delayed_work_sync(&channel->timeout_work)",
++             "pmi8950_torch_disable_locked(channel)"])
++
++    quiesce = function_body(driver, "pmi8950_torch_quiesce")
++    ordered("quiesce", quiesce,
++            ["for (i = 0; i < PMI8950_TORCH_CHANNELS; i++)",
++             "cancel_delayed_work_sync(&torch->channel[i].timeout_work)",
++             "pmi8950_torch_force_off_locked(torch)"])
++
++    for lifecycle in ("pmi8950_torch_remove", "pmi8950_torch_shutdown",
++                      "pmi8950_torch_suspend"):
++        body = function_body(driver, lifecycle)
++        require("pmi8950_torch_quiesce" in body,
++                f"{lifecycle} no longer quiesces the controller")
++
++    probe = function_body(driver, "pmi8950_torch_probe")
++    ordered("probe safety", probe,
++            ["torch->type != PMI8950_FLASH_TYPE",
++             "torch->subtype != PMI8950_FLASH_SUBTYPE_DUAL",
++             "pmi8950_torch_force_off_locked(torch)",
++             "devm_led_classdev_register"])
++
++
++def check_integration(root: Path) -> None:
++    dtsi = (root / "arch/arm64/boot/dts/qcom/pmi8950.dtsi").read_text()
++    vince = (root / "arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts").read_text()
++    kconfig = (root / "drivers/leds/Kconfig").read_text()
++    makefile = (root / "drivers/leds/Makefile").read_text()
++    config = (root / "arch/arm64/configs/msm8953.config").read_text()
++    binding = (root / "Documentation/devicetree/bindings/leds/"
++               "qcom,pmi8950-flash-led.yaml").read_text()
++
++    require("pmi8950_flash_led: led-controller@d300" in dtsi,
++            "generic PMI8950 flash node is missing")
++    generic = dtsi[dtsi.find("pmi8950_flash_led: led-controller@d300"):]
++    generic = generic[:generic.find("};")]
++    for fragment in ('compatible = "qcom,pmi8950-flash-led";',
++                     "reg = <0xd300>;", 'status = "disabled";'):
++        require(fragment in generic, f"generic flash node lacks {fragment}")
++
++    vince_flash = vince[vince.find("&pmi8950_flash_led {"):]
++    require(vince_flash.startswith("&pmi8950_flash_led {"),
++            "Vince flash override is missing")
++    vince_flash = vince_flash[:vince_flash.find("};")]
++    require('status = "okay";' in vince_flash,
++            "Vince does not explicitly enable the flash node")
++
++    require("config LEDS_QCOM_PMI8950_TORCH" in kconfig,
++            "Kconfig symbol is missing")
++    require("CONFIG_LEDS_QCOM_PMI8950_TORCH" in makefile,
++            "driver is absent from the LED Makefile")
++    require("CONFIG_LEDS_QCOM_PMI8950_TORCH=y" in config,
++            "msm8953 config does not build the diagnostic driver")
++    for fragment in ("qcom,pmi8950-flash-led", "maxItems: 1",
++                     "additionalProperties: false"):
++        require(fragment in binding, f"binding lacks {fragment}")
++
++
++def main() -> int:
++    root = Path(sys.argv[1]).resolve() if len(sys.argv) == 2 else \
++        Path(__file__).resolve().parents[1]
++    driver_path = root / "drivers/leds/leds-qcom-pmi8950-torch.c"
++    require(driver_path.is_file(), f"driver not found below {root}")
++    driver = driver_path.read_text()
++
++    checks = [
++        ("literal safety limits", lambda: check_constants(driver)),
++        ("diagnostic public surface", lambda: check_public_surface(driver)),
++        ("channel selection", lambda: check_channel_selection(driver)),
++        ("enable and fail-closed paths",
++         lambda: check_enable_and_fail_closed(driver)),
++        ("forced-off ordering", lambda: check_force_off(driver)),
++        ("timeout and lifecycle cleanup",
++         lambda: check_timeout_and_lifecycle(driver)),
++        ("DTS, Kconfig and binding integration", lambda: check_integration(root)),
++    ]
++
++    for label, check in checks:
++        check()
++        print(f"PASS: {label}")
++    print(f"PASS: all PMI8950 torch safety checks ({driver_path})")
++    return 0
++
++
++if __name__ == "__main__":
++    try:
++        raise SystemExit(main())
++    except (CheckFailure, OSError) as error:
++        print(f"FAIL: {error}", file=sys.stderr)
++        raise SystemExit(1)

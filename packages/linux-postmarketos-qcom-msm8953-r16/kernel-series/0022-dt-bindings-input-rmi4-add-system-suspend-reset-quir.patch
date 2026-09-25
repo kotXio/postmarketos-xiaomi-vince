@@ -1,0 +1,30 @@
+From 0fe4f5918580abcbab92a63398c5559ef89175cc Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sun, 6 Sep 2026 10:49:18 +0300
+Subject: [PATCH 22/42] dt-bindings: input: rmi4: add system suspend reset
+ quirk
+
+---
+ Documentation/devicetree/bindings/input/syna,rmi4.yaml | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/input/syna,rmi4.yaml b/Documentation/devicetree/bindings/input/syna,rmi4.yaml
+index 8685ef4481f4..bb49266ecdad 100644
+--- a/Documentation/devicetree/bindings/input/syna,rmi4.yaml
++++ b/Documentation/devicetree/bindings/input/syna,rmi4.yaml
+@@ -49,6 +49,15 @@ properties:
+     description:
+       Delay to wait after powering on the device.
+ 
++  syna,reset-on-system-suspend:
++    type: boolean
++    description:
++      The platform can reset or make the controller temporarily unavailable
++      before the RMI function suspend callbacks run. Skip the function sleep
++      command during system suspend and use bounded target-NACK recovery while
++      the controller is reconfigured during system resume. Runtime power
++      management is unaffected.
++
+   vdd-supply: true
+   vio-supply: true
+ 

@@ -1,7 +1,7 @@
 pkgname=alsa-ucm-conf-xiaomi-vince-tas2557
 pkgver=1.0
-pkgrel=1
-pkgdesc="Physically verified TAS2557 speaker and Mic2 UCM profile for Xiaomi vince"
+pkgrel=3
+pkgdesc="Verified TAS2557/Mic2 and experimental FM UCM profiles for Xiaomi vince"
 url="https://github.com/msm8953-mainline/alsa-ucm-conf"
 arch="noarch"
 license="BSD-3-Clause"
@@ -10,10 +10,12 @@ replaces="alsa-ucm-conf soc-qcom-msm8953-ucm"
 options="!check"
 source="
 	HiFi-TAS2557.conf
+	FM.conf
 	xiaomi-vince.conf
 "
 
 package() {
+	install -Dm644 "$srcdir/FM.conf" "$pkgdir/usr/share/alsa/ucm2/Xiaomi/vince/FM.conf"
 	install -Dm644 "$srcdir/HiFi-TAS2557.conf" \
 		"$pkgdir/usr/share/alsa/ucm2/Xiaomi/vince/HiFi-TAS2557.conf"
 	install -Dm644 "$srcdir/xiaomi-vince.conf" \
@@ -22,5 +24,6 @@ package() {
 
 sha512sums="
 0b293eb5898059b4df5cf143f34871f4b38964c10d23a0896cf4996338d5cd8d4ec391161f84a7d953d99fdfca01581f2220edebb365ca2ee1fcff6be0f1ca1e  HiFi-TAS2557.conf
-3e858480460afdba1eeb97055421f9acd88ae347cfcf61893174f39600a46861a8266d5fff9a2cc45c6abf0ba6947833331bd53e7c7bcb6c95d7e4c183676edc  xiaomi-vince.conf
+1f7a2e70b0a94bd714c264eee032325b24b3553f50bfadd1cd9b7d73f29709e571ac98fe6b945aaa13851f604e3fc62599bf2e40bfe6b317606d127d6b2f81cb  FM.conf
+eb0cb93d9df78c2f027180f8449b466b0aac53a6b95a98aa8168d4e31870bf20f3411eb4676c2e04f17f36ceb150fffe3a77d814218f85d528f5d6ffc0cc2861  xiaomi-vince.conf
 "

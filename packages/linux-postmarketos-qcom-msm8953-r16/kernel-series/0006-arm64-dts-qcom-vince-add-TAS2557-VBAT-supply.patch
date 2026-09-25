@@ -1,0 +1,22 @@
+From 792c16daa49db825d9663af1f7e8f138f66424b9 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sun, 30 Aug 2026 10:09:11 +0300
+Subject: [PATCH 06/42] arm64: dts: qcom: vince: add TAS2557 VBAT supply
+
+---
+ arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+index 8f9125894b0e..b8014e489ae4 100644
+--- a/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
++++ b/arch/arm64/boot/dts/qcom/msm8953-xiaomi-vince.dts
+@@ -196,6 +196,8 @@ tas2557: codec@4c {
+ 		reset-gpios = <&tlmm 86 GPIO_ACTIVE_LOW>;
+ 		interrupts-extended = <&tlmm 87 IRQ_TYPE_LEVEL_HIGH>;
+ 
++		vbat-supply = <&vph_pwr>;
++
+ 		/* AVDD/DVDD/IOVDD on the always-on 1.8 V rail */
+ 		iovdd-supply = <&pm8953_l6>;
+ 		avdd-supply = <&pm8953_l6>;

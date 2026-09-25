@@ -15,25 +15,30 @@ the work safely.
 
 - [Current hardware and software status](STATUS.md)
 - [Chronological project history](HISTORY.md)
-- [Verified fixes and experiments](fixes/README.md)
+- [Fixes and experiments](fixes/README.md)
 - [Package sources](packages/README.md)
+- [Device configuration](config/README.md)
 - [Kernel and pmaports patch series](patches/README.md)
 - [Pinned source revisions and provenance](SOURCES.md)
 
-## Verified improvements
+## What works
 
-- TAS2557 bottom speaker with a conservative, physically tested `-28 dB`
-  hardware gain.
+- TAS2557 bottom speaker with a conservative `-28 dB` hardware gain.
 - Clean default microphone route: `Mic2 -> INP3 -> ADC2 -> DEC1`, analog
   `ADC2 Volume=8`, digital source volume `100%`.
-- OV12A10 rear camera support with five tested sensor modes.
+- OV12A10 rear camera support with five available sensor modes.
 - DW9763 lens movement, parking and bounded manual-focus control.
 - Rear one-shot contrast autofocus integrated with libcamera and Plasma
   Camera, including rapid-switch teardown guards.
 - PMI8950 dual-colour rear torch with four hardware-backed levels, separate
-  cool/warm intensity and a tested `50 mA` per-channel cap.
+  cool/warm intensity and a `50 mA` per-channel safety cap.
+- Standard Linux control of the front selfie light through the binary
+  `white:torch-1` LED.
+- Built-in infrared transmission through rc-core and fixed-rate SPI sampling.
+- Native FM tuning, seeking and stereo audio through wired headphones or the
+  TAS2557 speaker.
 - Suspend-to-idle and power-button wake with working display and touch;
-  overnight testing also passed with normal battery behaviour.
+  overnight use showed normal battery behaviour.
 - LTR579 ambient light plus a polled raw proximity channel on a separately
   identified second handset; automatic binding and passive far readings pass.
 - Stable Angelfish launcher workaround that keeps GPU composition and Canvas
@@ -50,14 +55,26 @@ the work safely.
 - Autofocus is one-shot at rear-camera session start; continuous AF,
   touch-to-focus and calibrated focus distance are not implemented.
 - Plasma Camera encoded video remains slow and timestamp-imperfect and has no
-  audio on the tested stack; this is separate from the working autofocus path.
+  audio in the current public camera stack; this is separate from the working
+  autofocus path.
 - High-current photo flash and V4L2/sensor strobe integration are deliberately
   deferred; the continuous rear torch works.
-- The Hall sensor and SIM-dependent telephony/GPS paths remain unverified.
+- Infrared emission works, but compatibility with real appliances has not yet
+  been checked.
+- FM receiver control and audio routing are separate; qv4l2 is an engineering
+  panel rather than a complete radio player.
+- SIM-dependent telephony paths and an outdoor GNSS fix remain untested.
 - LTR579 physical near/cover response, thresholds, interrupts and wake events
-  remain unverified on the second hardware variant.
+  have not yet been checked on the second hardware variant.
 
 ## Releases
+
+The cumulative `r16` hardware update is available as
+[`v2026.09.25-r16`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.25-r16).
+It adds the front selfie light, rc-core infrared transmission and native V4L2
+FM radio while keeping the previously published hardware support. See the
+[`r16` release details](releases/v2026.09.25-r16.md) and
+[exact kernel source recipe](packages/linux-postmarketos-qcom-msm8953-r16/README.md).
 
 The suspend/resume update is available as
 [`v2026.09.12-suspend`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.12-suspend).
@@ -66,7 +83,7 @@ torch fixes. See the
 [suspend/resume release details](releases/v2026.09.12-suspend.md) for
 compatibility, installation and source patches.
 
-The base physically tested binary set is available as
+The base package set is available as
 [`v2026.09.04`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.04).
 It contains the cumulative kernel, matching MSM8953 device/udev packages,
 Vince camera policy, OV12A10 IPA tuning and TAS2557 UCM profile. The target is
@@ -83,8 +100,8 @@ claimed to be universal for every `vince`.
 The incremental torch update is available as
 [`v2026.09.05-torch`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.05-torch).
 It contains one cumulative `r7` kernel APK built from the reviewed public patch
-series plus its checksum manifest. Its config, Vince DTB,
-and modules match the tested `r7` build. It requires the public autofocus
+series plus its checksum manifest. Its config, Vince DTB and modules match the
+published source recipe. It requires the public autofocus
 Release linked above. It adds continuous torch control only; photo flash
 remains deferred.
 
@@ -93,7 +110,7 @@ The experimental browser hardware-video update is available as
 It contains one cumulative Qt WebEngine `6.11.1-r10` APK. With the documented
 Angelfish launcher flag, the browser uses the Qualcomm Venus stateful V4L2
 decoder while retaining the tested WebGL and GPU-rasterization stability
-workaround. Fixed H.264 and normal YouTube playback are physically verified;
+workaround. Fixed H.264 and normal YouTube playback work;
 extended fullscreen stability is not yet claimed.
 
 Read the compatibility and public package order in

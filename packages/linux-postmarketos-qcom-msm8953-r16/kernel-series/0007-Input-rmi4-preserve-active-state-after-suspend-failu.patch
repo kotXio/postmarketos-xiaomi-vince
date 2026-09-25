@@ -1,0 +1,64 @@
+From 035b16fbc97eb1d5945cd78ba0025c960d21dcce Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sun, 30 Aug 2026 15:32:21 +0300
+Subject: [PATCH 07/42] Input: rmi4: preserve active state after suspend
+ failure
+
+---
+ drivers/input/rmi4/rmi_driver.c | 8 +++++---
+ drivers/input/rmi4/rmi_i2c.c    | 8 +++++---
+ 2 files changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/input/rmi4/rmi_driver.c b/drivers/input/rmi4/rmi_driver.c
+index 083cb56cf867..7821728addfa 100644
+--- a/drivers/input/rmi4/rmi_driver.c
++++ b/drivers/input/rmi4/rmi_driver.c
+@@ -947,12 +947,14 @@ int rmi_driver_suspend(struct rmi_device *rmi_dev, bool enable_wake)
+ 	int retval;
+ 
+ 	retval = rmi_suspend_functions(rmi_dev);
+-	if (retval)
++	if (retval) {
+ 		dev_warn(&rmi_dev->dev, "Failed to suspend functions: %d\n",
+ 			retval);
++		return retval;
++	}
+ 
+ 	rmi_disable_irq(rmi_dev, enable_wake);
+-	return retval;
++	return 0;
+ }
+ EXPORT_SYMBOL_GPL(rmi_driver_suspend);
+ 
+@@ -964,7 +966,7 @@ int rmi_driver_resume(struct rmi_device *rmi_dev, bool clear_wake)
+ 
+ 	retval = rmi_resume_functions(rmi_dev);
+ 	if (retval)
+-		dev_warn(&rmi_dev->dev, "Failed to suspend functions: %d\n",
++		dev_warn(&rmi_dev->dev, "Failed to resume functions: %d\n",
+ 			retval);
+ 
+ 	return retval;
+diff --git a/drivers/input/rmi4/rmi_i2c.c b/drivers/input/rmi4/rmi_i2c.c
+index beff566ca2c8..22bd3c3bb8e4 100644
+--- a/drivers/input/rmi4/rmi_i2c.c
++++ b/drivers/input/rmi4/rmi_i2c.c
+@@ -317,13 +317,15 @@ static int rmi_i2c_suspend(struct device *dev)
+ 	int ret;
+ 
+ 	ret = rmi_driver_suspend(rmi_i2c->xport.rmi_dev, true);
+-	if (ret)
+-		dev_warn(dev, "Failed to resume device: %d\n", ret);
++	if (ret) {
++		dev_warn(dev, "Failed to suspend device: %d\n", ret);
++		return ret;
++	}
+ 
+ 	regulator_bulk_disable(ARRAY_SIZE(rmi_i2c->supplies),
+ 			       rmi_i2c->supplies);
+ 
+-	return ret;
++	return 0;
+ }
+ 
+ static int rmi_i2c_resume(struct device *dev)

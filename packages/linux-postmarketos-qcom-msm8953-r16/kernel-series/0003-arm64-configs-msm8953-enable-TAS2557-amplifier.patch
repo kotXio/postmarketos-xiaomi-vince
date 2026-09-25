@@ -1,0 +1,25 @@
+From 0a0f7cac3660f987bffd3b2ce59c9895586f309e Mon Sep 17 00:00:00 2001
+From: Gianluca Boiano <morf3089@gmail.com>
+Date: Wed, 17 Jun 2026 16:23:11 +0200
+Subject: [PATCH 03/42] arm64: configs: msm8953: enable TAS2557 amplifier
+
+Build the TAS2557 mono smart amplifier driver as a module, used by the
+Xiaomi Redmi 5 Plus (vince) for its loudspeaker.
+
+Signed-off-by: Gianluca Boiano <morf3089@gmail.com>
+---
+ arch/arm64/configs/msm8953.config | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/configs/msm8953.config b/arch/arm64/configs/msm8953.config
+index 0051dbaa50fa..e2c380892fdf 100644
+--- a/arch/arm64/configs/msm8953.config
++++ b/arch/arm64/configs/msm8953.config
+@@ -37,6 +37,7 @@ CONFIG_SND_SOC_MSM8916_QDSP6=m
+ CONFIG_SND_SOC_MSM8916_WCD_ANALOG=m
+ CONFIG_SND_SOC_MSM8916_WCD_DIGITAL=m
+ CONFIG_SND_SOC_QDSP6_Q6VOICE=m
++CONFIG_SND_SOC_TAS2557=m
+ CONFIG_STACKTRACE=y
+ CONFIG_THERMAL_GOV_BANG_BANG=y
+ CONFIG_THERMAL_GOV_USER_SPACE=y

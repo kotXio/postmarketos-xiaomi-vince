@@ -1,0 +1,21 @@
+From 8315ce9c15bc0a080f1abac478567897560aea67 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sat, 5 Sep 2026 13:27:59 +0300
+Subject: [PATCH 19/42] leds: qcom: include OF device table definition
+
+---
+ drivers/leds/leds-qcom-pmi8950-torch.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/leds/leds-qcom-pmi8950-torch.c b/drivers/leds/leds-qcom-pmi8950-torch.c
+index 7fb5d28da50c..b48eb0ff4d98 100644
+--- a/drivers/leds/leds-qcom-pmi8950-torch.c
++++ b/drivers/leds/leds-qcom-pmi8950-torch.c
+@@ -10,6 +10,7 @@
+ #include <linux/delay.h>
+ #include <linux/device.h>
+ #include <linux/leds.h>
++#include <linux/mod_devicetable.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
+ #include <linux/platform_device.h>

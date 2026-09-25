@@ -1,5 +1,13 @@
 # Source patches
 
+The exact cumulative `r16` build series is kept with its APKBUILD and
+configuration under
+[`packages/linux-postmarketos-qcom-msm8953-r16`](../packages/linux-postmarketos-qcom-msm8953-r16/README.md).
+That 43-patch recipe is the source of truth for the `r16` binary Release.
+
+The directories below preserve the shorter public series used by the earlier
+incremental releases and the independent userspace patch sets.
+
 The public source is split by upstream target:
 
 - [`kernel/`](kernel/README.md): Linux changes, in one cumulative order;

@@ -1,8 +1,9 @@
 # Package sources
 
-This directory contains the reviewed Alpine/postmarketOS package source used
-by the tested device configuration:
+This directory contains the reviewed Alpine/postmarketOS package sources used
+for the Vince configuration:
 
+- [`linux-postmarketos-qcom-msm8953-r16`](linux-postmarketos-qcom-msm8953-r16/README.md);
 - [`alsa-ucm-conf-xiaomi-vince-tas2557`](alsa-ucm-conf-xiaomi-vince-tas2557/README.md);
 - [`firmware-xiaomi-vince-tas2557-local`](firmware-xiaomi-vince-tas2557-local/README.md);
 - [`libcamera-ipa-ov12a10`](libcamera-ipa-ov12a10/README.md);
@@ -33,6 +34,9 @@ are released in stages:
 3. Install [`v2026.09.05-autofocus`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.05-autofocus).
 4. Install [`v2026.09.05-torch`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.05-torch).
 5. Install [`v2026.09.12-suspend`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.12-suspend).
+6. Install the cumulative
+   [`v2026.09.25-r16`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.25-r16)
+   update.
 
 The WebEngine update is separate from that kernel sequence. It requires the
 official Qt WebEngine `6.11.1-r3` package as its starting version and was tested
@@ -183,6 +187,26 @@ This update changes only the kernel package. Keep the existing device, UCM,
 firmware, libcamera/IPA, tuning and Plasma Camera packages. Installation,
 checksums and the public `r7` fallback are documented in the
 [release notes](../releases/v2026.09.12-suspend.md).
+
+## Cumulative r16 hardware update
+
+Release `v2026.09.25-r16` upgrades the public `r13` state with the following
+packages and supporting FM configuration:
+
+| Package | Purpose |
+| --- | --- |
+| `linux-postmarketos-qcom-msm8953-7.0.9_p20260914105626-r16.apk` | Cumulative kernel with the front light, rc-core infrared and native V4L2 FM receiver. |
+| `alsa-ucm-conf-xiaomi-vince-tas2557-1.0-r3.apk` | Retains the TAS2557/Mic2 routes and adds the 48 kHz stereo FM route. |
+| `qv4l2-1.32.0-r1.apk` | Unmodified Alpine V4L2 tuning and mute control. |
+
+The three small files under [`../config/vince-fm`](../config/vince-fm/README.md)
+provide module loading, `/dev/radio0` access and the Plasma launcher. The exact
+kernel APKBUILD, configuration, changed-source manifest and 43-patch series are
+under
+[`linux-postmarketos-qcom-msm8953-r16`](linux-postmarketos-qcom-msm8953-r16/README.md).
+
+See the [release notes](../releases/v2026.09.25-r16.md) for the exact
+compatibility, checksums, installation and rollback instructions.
 
 ## Experimental WebEngine hardware-video release
 

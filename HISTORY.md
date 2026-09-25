@@ -16,6 +16,20 @@ handset. Reproduction details are linked where available.
   cannot distinguish LTR579 from LTRF216A.
 - See the [LTR579 variant guide](fixes/ltr579-proximity.md).
 
+## 2026-09-15 — Front light, infrared and FM radio
+
+- Added the front selfie light as a standard Linux `white:torch-1` LED. It also
+  turns off automatically when the phone enters suspend.
+- Added infrared transmission through Linux rc-core using fixed-rate SPI
+  sampling. Compatibility with real appliances still needs to be checked.
+- Added native V4L2 FM radio with tuning, seeking and stereo audio through
+  wired headphones or the TAS2557 speaker. qv4l2 handles tuning, while UCM
+  `r3` provides the audio routes.
+- Combined these additions with the existing hardware fixes in cumulative
+  kernel `r16`.
+- Source and reproduction details are in the
+  [cumulative r16 guide](fixes/cumulative-r16.md).
+
 ## 2026-09-12 — Suspend/resume
 
 Finally, after nearly two weeks of trying, failing, and a little crying,
@@ -72,27 +86,28 @@ suspend/resume works!
 
 ## 2026-09-02 — DW9763 manual focus
 
-- Added and physically verified DW9763 lens control, movement and parking.
+- Added DW9763 lens control, movement and safe power-down parking.
 
 ## 2026-09-01 — OV12A10 modes
 
-- Added five tested rear-camera sensor modes, including a conservative 1080p
-  cap near `75 fps`.
+- Added five rear-camera sensor modes, including a conservative 1080p cap near
+  `75 fps`.
 
 ## 2026-08-30 — RMI4 failed-suspend guard
 
 - Reproduced an RMI4 F01 suspend write failure that could disable touch until
   reboot.
-- Added and temporarily tested a safety guard that preserves IRQ and regulator
-  state when device suspend fails.
-- Installed the tested guard persistently and verified it across normal boots.
+- Added a safety guard that preserves IRQ and regulator state when device
+  suspend fails.
+- Made the guard persistent after confirming that touch continued to work
+  across normal boots.
 - This was the first protective fix; the remaining suspend/resume problems
   were addressed in the [September 12 update](fixes/suspend-resume.md).
 
 ## 2026-08-29 — postmarketOS baseline and TAS2557 audio
 
-- Installed the postmarketOS `v26.06` Plasma Mobile baseline on `vince`.
-- Enabled the TAS2557 bottom speaker and verified conservative `-28 dB` output.
+- Established the postmarketOS `v26.06` Plasma Mobile baseline on `vince`.
+- Enabled the TAS2557 bottom speaker with a conservative `-28 dB` output level.
 - Identified the clean microphone path as
   `Mic2 -> INP3 -> ADC2 -> DEC1` and selected it for speaker and earpiece
   profiles with analog gain `8`.

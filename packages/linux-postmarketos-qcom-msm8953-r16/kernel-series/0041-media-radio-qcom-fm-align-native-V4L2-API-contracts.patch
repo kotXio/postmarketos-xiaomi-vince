@@ -1,0 +1,125 @@
+From 77eb83dde285bdfebdd9ca8f704ee0d3e93b991e Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Mon, 14 Sep 2026 09:37:21 +0300
+Subject: [PATCH 41/42] media: radio: qcom-fm: align native V4L2 API contracts
+
+The native radio bridge rejects unsupported tuner audio modes and
+non-grid frequencies, returns a nonstandard errno for bounded seek,
+and lacks standard control-event hooks. This breaks v4l2-compliance.
+
+Accept audio-mode fallback without promising forced mono, clamp and
+round LOW-unit frequencies to the existing RX channel grid, select
+the nearest supported seek spacing and use EINVAL for non-wrap seek.
+Wire the existing V4L2 control subscribe, unsubscribe and poll helpers.
+
+Preserve transport, receive-only command allowlist, locking, firmware
+configuration ownership and the cumulative Q6ASM/audio fixes.
+
+Tests: extracted real-handler contract red/green under ASan/UBSan,
+328001 frequency units, original wire/ENABLE suites, and two matching
+external-module builds. Phone compliance and audio remain separate.
+
+Signed-off-by: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+---
+ .../radio/qcom-fm-native/radio-qcom-fm.c      | 33 ++++++++++++-------
+ 1 file changed, 22 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/media/radio/qcom-fm-native/radio-qcom-fm.c b/drivers/media/radio/qcom-fm-native/radio-qcom-fm.c
+index 26932ec43878..9302802484be 100644
+--- a/drivers/media/radio/qcom-fm-native/radio-qcom-fm.c
++++ b/drivers/media/radio/qcom-fm-native/radio-qcom-fm.c
+@@ -9,6 +9,8 @@
+ #include <linux/completion.h>
+ #include <linux/delay.h>
+ #include <linux/lockdep.h>
++#include <linux/math.h>
++#include <linux/minmax.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
+ #include <linux/of.h>
+@@ -18,6 +20,7 @@
+ #include <linux/spinlock.h>
+ #include <media/v4l2-ctrls.h>
+ #include <media/v4l2-device.h>
++#include <media/v4l2-event.h>
+ #include <media/v4l2-fh.h>
+ #include <media/v4l2-ioctl.h>
+ #include "fm-wire.h"
+@@ -345,8 +348,11 @@ static int fm_set_tuner(struct file *file, void *priv, const struct v4l2_tuner *
+ {
+ 	if (t->index)
+ 		return -EINVAL;
+-	/* Firmware blend/stereo settings left at stock; don't promise forced mono. */
+-	return t->audmode == V4L2_TUNER_MODE_STEREO ? 0 : -EOPNOTSUPP;
++	/*
++	 * Unsupported modes fall back to stock stereo/blend, reported by G_TUNER.
++	 * Do not claim forced mono or change firmware stereo configuration.
++	 */
++	return 0;
+ }
+ 
+ static int fm_get_frequency(struct file *file, void *priv, struct v4l2_frequency *f)
+@@ -365,10 +371,14 @@ static int fm_set_frequency(struct file *file, void *priv,
+ {
+ 	struct qcom_fm *fm = video_drvdata(file);
+ 
+-	if (f->tuner || f->type != V4L2_TUNER_RADIO || f->frequency % 16 ||
+-	    !fm_frequency_valid(f->frequency / 16))
++	u32 units;
++
++	if (f->tuner || f->type != V4L2_TUNER_RADIO)
+ 		return -EINVAL;
+-	return fm_tune(fm, f->frequency / 16);
++	/* Clamp before arithmetic; LOW units are 62.5 Hz, channel grid is 50 kHz. */
++	units = clamp_t(u32, f->frequency, FM_LOW * 16, FM_HIGH * 16);
++	return fm_tune(fm, FM_LOW +
++		       DIV_ROUND_CLOSEST(units - FM_LOW * 16, 800U) * 50);
+ }
+ 
+ static int fm_enum_bands(struct file *file, void *priv, struct v4l2_frequency_band *b)
+@@ -394,19 +404,17 @@ static int fm_seek(struct file *file, void *priv, const struct v4l2_hw_freq_seek
+ 		return -EWOULDBLOCK;
+ 	/* Firmware SEEK wraps; unsupported bounded/sub-band requests must fail. */
+ 	if (!s->wrap_around)
+-		return -EOPNOTSUPP;
++		return -EINVAL;
+ 	if ((s->rangelow && s->rangelow != FM_LOW * 16) ||
+ 	    (s->rangehigh && s->rangehigh != FM_HIGH * 16))
+ 		return -EINVAL;
+-	if (s->spacing && s->spacing != 50000 && s->spacing != 100000 &&
+-	    s->spacing != 200000)
+-		return -EINVAL;
+ 	ret = fm_tune(fm, fm->frequency);
+ 	if (ret)
+ 		return ret;
+ 	memcpy(config, fm->config, 12);
+ 	if (s->spacing)
+-		config[1] = s->spacing == 200000 ? 0 : s->spacing == 100000 ? 1 : 2;
++		/* Nearest existing firmware spacing; zero retains the current default. */
++		config[1] = s->spacing >= 150000 ? 0 : s->spacing >= 75000 ? 1 : 2;
+ 	ret = fm_set_config(fm, config);
+ 	if (!ret) {
+ 		memcpy(fm->config, config, 12);
+@@ -438,6 +446,8 @@ static const struct v4l2_ioctl_ops fm_ioctl_ops = {
+ 	.vidioc_s_frequency = fm_set_frequency,
+ 	.vidioc_enum_freq_bands = fm_enum_bands,
+ 	.vidioc_s_hw_freq_seek = fm_seek,
++	.vidioc_subscribe_event = v4l2_ctrl_subscribe_event,
++	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
+ };
+ 
+ static int fm_open(struct file *file)
+@@ -480,6 +490,7 @@ static const struct v4l2_file_operations fm_file_ops = {
+ 	.open = fm_open,
+ 	.release = fm_close,
+ 	.unlocked_ioctl = video_ioctl2,
++	.poll = v4l2_ctrl_poll,
+ };
+ 
+ static void fm_free(struct v4l2_device *v4l2)
+@@ -633,4 +644,4 @@ module_rpmsg_driver(fm_driver);
+ MODULE_AUTHOR("Kostiantyn Andriiuk <konstantin@andriyuk.com>");
+ MODULE_DESCRIPTION("Experimental Vince receive-only WCNSS FM V4L2 bridge");
+ MODULE_LICENSE("GPL");
+-MODULE_VERSION("0.3");
++MODULE_VERSION("0.4");

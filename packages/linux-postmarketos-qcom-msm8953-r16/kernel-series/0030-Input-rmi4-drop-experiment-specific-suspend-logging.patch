@@ -1,0 +1,133 @@
+From 16ebdf3a0ab8d7ab885e59817f909687ecbb2738 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sat, 12 Sep 2026 09:45:47 +0300
+Subject: [PATCH 30/42] Input: rmi4: drop experiment-specific suspend logging
+
+Retain bounded system-resume recovery, IRQ/power ordering and mutex
+protection. Remove informational experiment markers and the log-only
+retry snapshot; preserve useful error warnings.
+
+Signed-off-by: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+---
+ drivers/input/rmi4/rmi_driver.c | 17 +++--------------
+ drivers/input/rmi4/rmi_f01.c    | 10 +---------
+ drivers/input/rmi4/rmi_i2c.c    |  9 +--------
+ 3 files changed, 5 insertions(+), 31 deletions(-)
+
+diff --git a/drivers/input/rmi4/rmi_driver.c b/drivers/input/rmi4/rmi_driver.c
+index 8396e2c032bf..00ba3ee25227 100644
+--- a/drivers/input/rmi4/rmi_driver.c
++++ b/drivers/input/rmi4/rmi_driver.c
+@@ -949,10 +949,7 @@ int rmi_driver_suspend(struct rmi_device *rmi_dev, bool enable_wake)
+ {
+ 	int retval;
+ 
+-	if (enable_wake && rmi_has_system_suspend_reset(rmi_dev)) {
+-		dev_info(&rmi_dev->dev,
+-			 "[rmi4-suspend-reset] skipping function suspend\n");
+-	} else {
++	if (!enable_wake || !rmi_has_system_suspend_reset(rmi_dev)) {
+ 		retval = rmi_suspend_functions(rmi_dev);
+ 		if (retval) {
+ 			dev_warn(&rmi_dev->dev,
+@@ -973,19 +970,15 @@ int rmi_driver_resume(struct rmi_device *rmi_dev, bool clear_wake)
+ 	retval = rmi_enable_irq(rmi_dev, clear_wake);
+ 	if (retval && clear_wake && rmi_has_system_suspend_reset(rmi_dev)) {
+ 		dev_warn(&rmi_dev->dev,
+-			 "[rmi4-suspend-reset] pending-status recovery failed: %d\n",
++			 "System resume pending-status recovery failed: %d\n",
+ 			 retval);
+ 		return retval;
+ 	}
+ 
+ 	retval = rmi_resume_functions(rmi_dev);
+-	if (retval) {
++	if (retval)
+ 		dev_warn(&rmi_dev->dev, "Failed to resume functions: %d\n",
+ 			retval);
+-	} else if (clear_wake && rmi_has_system_suspend_reset(rmi_dev)) {
+-		dev_info(&rmi_dev->dev,
+-			 "[rmi4-suspend-reset] core resume complete\n");
+-	}
+ 
+ 	return retval;
+ }
+@@ -1146,10 +1139,6 @@ static int rmi_driver_probe(struct device *dev)
+ 		if (retval)
+ 			return retval;
+ 	}
+-	if (rmi_has_system_suspend_reset(rmi_dev))
+-		dev_info(dev,
+-			 "[rmi4-suspend-reset] system-suspend reset recovery enabled\n");
+-
+ 	data = devm_kzalloc(dev, sizeof(struct rmi_driver_data), GFP_KERNEL);
+ 	if (!data)
+ 		return -ENOMEM;
+diff --git a/drivers/input/rmi4/rmi_f01.c b/drivers/input/rmi4/rmi_f01.c
+index 8dc6785ca4f8..47be64284b25 100644
+--- a/drivers/input/rmi4/rmi_f01.c
++++ b/drivers/input/rmi4/rmi_f01.c
+@@ -698,20 +698,12 @@ static irqreturn_t rmi_f01_attention(int irq, void *ctx)
+ 			 "Device in bootloader mode, please update firmware\n");
+ 
+ 	if (RMI_F01_STATUS_UNCONFIGURED(device_status)) {
+-		if (rmi_has_system_suspend_reset(rmi_dev))
+-			dev_warn(&fn->dev,
+-				 "[rmi4-suspend-reset] device reset detected\n");
+-		else
+-			dev_warn(&fn->dev, "Device reset detected.\n");
++		dev_warn(&fn->dev, "Device reset detected.\n");
+ 		error = rmi_dev->driver->reset_handler(rmi_dev);
+ 		if (error) {
+ 			dev_err(&fn->dev, "Device reset failed: %d\n", error);
+ 			return IRQ_RETVAL(error);
+ 		}
+-
+-		if (rmi_has_system_suspend_reset(rmi_dev))
+-			dev_info(&fn->dev,
+-				 "[rmi4-suspend-reset] device reconfiguration complete\n");
+ 	}
+ 
+ 	return IRQ_HANDLED;
+diff --git a/drivers/input/rmi4/rmi_i2c.c b/drivers/input/rmi4/rmi_i2c.c
+index 362e268e79d4..502fb6dd316b 100644
+--- a/drivers/input/rmi4/rmi_i2c.c
++++ b/drivers/input/rmi4/rmi_i2c.c
+@@ -85,7 +85,7 @@ static bool rmi_i2c_retry_system_resume(struct rmi_i2c_xport *rmi_i2c,
+ 
+ 	if (!rmi_i2c->system_resume_retries)
+ 		dev_warn(&client->dev,
+-			 "[rmi4-suspend-reset] resume NACK at %#06x; retrying for at most %u ms\n",
++			 "System resume NACK at %#06x; retrying for at most %u ms\n",
+ 			 addr, RMI_I2C_RESUME_TIMEOUT_MS);
+ 
+ 	rmi_i2c->system_resume_retries++;
+@@ -388,7 +388,6 @@ static int rmi_i2c_resume(struct device *dev)
+ 	struct i2c_client *client = to_i2c_client(dev);
+ 	struct rmi_i2c_xport *rmi_i2c = i2c_get_clientdata(client);
+ 	bool reset_on_system_suspend;
+-	unsigned int retries = 0;
+ 	int ret;
+ 
+ 	ret = regulator_bulk_enable(ARRAY_SIZE(rmi_i2c->supplies),
+@@ -408,8 +407,6 @@ static int rmi_i2c_resume(struct device *dev)
+ 		rmi_i2c->system_resume_retries = 0;
+ 		rmi_i2c->system_resume_error = 0;
+ 		mutex_unlock(&rmi_i2c->page_mutex);
+-		dev_info(dev,
+-			 "[rmi4-suspend-reset] system-resume recovery armed\n");
+ 	}
+ 
+ 	ret = rmi_driver_resume(rmi_i2c->xport.rmi_dev, true);
+@@ -419,11 +416,7 @@ static int rmi_i2c_resume(struct device *dev)
+ 		rmi_i2c->system_resume_recovery = false;
+ 		if (!ret && rmi_i2c->system_resume_error)
+ 			ret = rmi_i2c->system_resume_error;
+-		retries = rmi_i2c->system_resume_retries;
+ 		mutex_unlock(&rmi_i2c->page_mutex);
+-		dev_info(dev,
+-			 "[rmi4-suspend-reset] system-resume recovery complete: ret=%d retries=%u\n",
+-			 ret, retries);
+ 	}
+ 
+ 	if (ret)
