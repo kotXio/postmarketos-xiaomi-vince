@@ -15,3 +15,4 @@ each hardware or software area.
 - [PMI8950 dual-colour rear torch](pmi8950-torch.md)
 - [Angelfish rendering workaround](angelfish-rendering.md)
 - [Qt WebEngine hardware video through Qualcomm Venus](hardware-video.md)
+- [Android apps with Waydroid: native graphics and integration workarounds](waydroid.md)

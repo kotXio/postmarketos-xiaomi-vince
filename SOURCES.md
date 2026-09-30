@@ -390,6 +390,32 @@ and [FFmpeg V4L2 mem2mem implementation](https://ffmpeg.org/doxygen/trunk/v4l2__
 were used to validate the already working Qualcomm Venus decoder independently
 before changing Qt WebEngine.
 
+## Android apps with Waydroid
+
+The [Waydroid guide](fixes/waydroid.md) uses the distribution's Waydroid
+`1.6.2-r0` package and official ARM64 LineageOS 20 / Android 13 images dated
+`20260403`: VANILLA system and MAINLINE vendor. Android graphics use the
+vendor image's Mesa `26.0.1`, not the host's Mesa libraries.
+
+The per-process graphics settings, scoped firewall rules and stale-session
+recovery were developed by Kostiantyn Andriiuk <konstantin@andriyuk.com> from
+handset tests. No third-party source code was copied or patched for these
+workarounds. References used to understand the existing behavior were:
+
+- Waydroid's [LXC and graphics selection](https://github.com/waydroid/waydroid/blob/1.6.2/tools/helpers/lxc.py)
+  and [Binder probing](https://github.com/waydroid/waydroid/blob/1.6.2/tools/helpers/drivers.py).
+- LineageOS 20's [SurfaceFlinger shader-cache switch](https://github.com/LineageOS/android_frameworks_native/blob/lineage-20.0/services/surfaceflinger/SurfaceFlinger.cpp).
+- Mesa's [Freedreno documentation and debug options](https://docs.mesa3d.org/drivers/freedreno.html).
+- Waydroid's [runtime properties](https://docs.waydro.id/usage/waydroid-prop-options)
+  and [application installation](https://docs.waydro.id/usage/install-and-run-android-applications).
+- The ARM64 [Android media configuration](https://github.com/waydroid/android_device_waydroid_waydroid/blob/lineage-20/device.mk),
+  used to distinguish software codecs from a Venus hardware-decoding path.
+
+The [AOSP V4L2 Codec2 project](https://android.googlesource.com/platform/external/v4l2_codec2/)
+was investigated as a possible future decoder integration; it is not included
+in this working configuration. Android images and third-party application APKs
+are not redistributed here.
+
 ## Explicit non-sources
 
 - `ov02a10.c` was only a structural comparison; none of its sensor registers
