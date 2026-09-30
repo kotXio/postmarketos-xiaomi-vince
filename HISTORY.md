@@ -3,6 +3,17 @@
 This chronology lists changes and investigations verified on the physical
 handset. Reproduction details are linked where available.
 
+## 2026-09-24 — Android apps with Waydroid
+
+- Made Android 13 usable inside postmarketOS with native Adreno graphics,
+  without replacing the phone's OS.
+- Fixed the Android interface stalls with targeted graphics settings while
+  keeping normal GPU rendering for applications. Vector Pinball plays smoothly.
+- Restored internet access and documented how to reopen Android after Power
+  off. Speaker output and ordinary video playback also work.
+- This remains experimental, and Android video still uses software decoding.
+  See the [Waydroid guide](fixes/waydroid.md).
+
 ## 2026-09-18 — LTR579 hardware variant
 
 - Identified an LTR579 ambient-light/proximity sensor in a second Redmi 5 Plus
@@ -15,6 +26,15 @@ handset. Reproduction details are linked where available.
   remain open. The Device Tree change is optional because part ID `0xb1`
   cannot distinguish LTR579 from LTRF216A.
 - See the [LTR579 variant guide](fixes/ltr579-proximity.md).
+
+## 2026-09-16 — SDR++ on a phone
+
+- Added native SDR++ for a USB RTL-SDR receiver, with a live spectrum,
+  waterfall and radio audio.
+- Fixed Wayland touch input and made the app icon start reception.
+- Fixed normal shutdown so closing the window releases the USB receiver.
+- Included 14 modules and an optional phone-sized profile with lighter
+  waterfall settings. See the [SDR++ guide](fixes/sdrpp.md).
 
 ## 2026-09-15 — Front light, infrared and FM radio
 
@@ -44,6 +64,25 @@ suspend/resume works!
 - The cumulative `r13` kernel keeps the existing audio, camera, autofocus and
   torch fixes. See the [suspend/resume guide](fixes/suspend-resume.md).
 
+## 2026-09-09 — Plasma Camera video with sound
+
+- Added rear-camera 720p recording at about 30 fps with Mic2 audio and
+  Qualcomm Venus hardware H.264 encoding in Camera `r15` and Qt Multimedia `r7`.
+- Fixed recurring recording stalls, timestamps and bitrate handling; saving
+  now finishes promptly.
+- Kept the recording preview at about 5 fps so it does not slow down the saved
+  video. The normal preview returns after recording stops.
+- Source patches, setup and remaining limits are in the
+  [Plasma Camera video guide](fixes/plasma-camera-video.md).
+
+## 2026-09-08 — KRecorder from the app icon
+
+- Fixed recording getting stuck at `0:00:00`. KRecorder now records Mic2,
+  advances the timer and saves normally when opened from its Plasma icon.
+- Reused the Qt Multimedia audio fix with a small launcher change; no custom
+  KRecorder APK is needed.
+- See the [KRecorder guide](fixes/krecorder.md).
+
 ## 2026-09-05 — Angelfish hardware video through Venus
 
 - Added hardware video decoding to Angelfish through Qualcomm Venus using the
@@ -70,8 +109,9 @@ suspend/resume works!
   front cameras.
 - Autofocus, camera switching, saved photos and safe lens parking now work on
   the test phone.
-- Plasma Camera video recording remains slow and has no audio; direct libcamera
-  capture is unaffected.
+- Video recording was still slow and silent at this stage; direct libcamera
+  capture was unaffected. The [later video update](fixes/plasma-camera-video.md)
+  adds hardware encoding and sound.
 
 ## 2026-09-04 — Angelfish stability and Venus investigation
 

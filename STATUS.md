@@ -1,6 +1,6 @@
 # Device status
 
-Last updated: 2026-09-25
+Last updated: 2026-09-30
 
 Reference device: Xiaomi Redmi 5 Plus (`vince`), `aarch64`, postmarketOS `v26.06`,
 Plasma Mobile, Linux `7.0.9-msm8953`, cumulative kernel package
@@ -54,6 +54,16 @@ that the same package will work on another release or package baseline.
 | Modem | Partial | Firmware loads and the SIM/operator are detected. The expired test SIM prevented network registration testing. |
 | Calls, SMS, mobile data | Unverified | A known-active SIM is needed for service tests. |
 | GNSS / GPS | Unverified | No outdoor position-fix test yet; standalone GNSS does not inherently require an active SIM. |
+
+## Optional USB receiver
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| SDR++ / external RTL-SDR | Working | Live spectrum, waterfall, touch controls and audio with an RTL2838UHIDIR/R820T over OTG. The icon starts reception; closing the app releases the receiver. |
+
+This application was tested with kernel `r17`, separately from the public
+`r16` reference above. It uses USB/libusb, not the built-in FM radio or the
+kernel DVB interface. See [SDR++ setup](fixes/sdrpp.md).
 
 ## Second-handset LTR579 variant
 

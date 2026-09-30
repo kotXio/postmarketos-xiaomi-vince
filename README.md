@@ -37,6 +37,8 @@ the work safely.
 - Built-in infrared transmission through rc-core and fixed-rate SPI sampling.
 - Native FM radio with full-band scanning, saved stations and stereo audio
   through wired headphones or the TAS2557 speaker.
+- [SDR++ with a USB RTL-SDR receiver](fixes/sdrpp.md): live spectrum,
+  waterfall, Wayland touch controls and radio audio.
 - Suspend-to-idle and power-button wake with working display and touch;
   overnight use showed normal battery behaviour.
 - LTR579 ambient light plus a polled raw proximity channel on a separately
@@ -69,6 +71,12 @@ the work safely.
   have not yet been checked on the second hardware variant.
 
 ## Releases
+
+SDR++ for an external USB RTL-SDR receiver is available as
+[`v2026.09.30-sdrpp`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.30-sdrpp),
+with the application APK, complete sources and checksums. It is an optional
+application, separate from the kernel updates below. See the
+[SDR++ setup guide](fixes/sdrpp.md).
 
 The cumulative `r16` hardware update is available as
 [`v2026.09.25-r16`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.25-r16).

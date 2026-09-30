@@ -6,3 +6,5 @@ phone-specific data.
 
 - [`vince-fm`](vince-fm/README.md) adds native FM module loading, access rules
   and a qv4l2 launcher.
+- [`sdrpp`](sdrpp/README.md) provides an optional phone-sized SDR++ layout
+  without receiver identity or saved recordings.

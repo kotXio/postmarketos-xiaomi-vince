@@ -453,6 +453,31 @@ was investigated as a possible future decoder integration; it is not included
 in this working configuration. Android images and third-party application APKs
 are not redistributed here.
 
+## SDR++ with a USB receiver
+
+The application uses [Alexandre Rouma's SDR++](https://github.com/AlexandreRouma/SDRPlusPlus)
+at commit [`8c9f5ee8`](https://github.com/AlexandreRouma/SDRPlusPlus/tree/8c9f5ee8fe405775bfcd62c8c8f8c0fc928a64af).
+The module authors remain credited in the source; the package does not claim
+their decoders as original project work.
+
+The weather compatibility patch directly adapts three older SDR++ files from
+commit [`6f747dad`](https://github.com/AlexandreRouma/SDRPlusPlus/tree/6f747dad0d28964cb79e245c1069b165b0deaa54/core/src/dsp):
+[`deframing.h`](https://github.com/AlexandreRouma/SDRPlusPlus/blob/6f747dad0d28964cb79e245c1069b165b0deaa54/core/src/dsp/deframing.h),
+[`noaa/hrpt.h`](https://github.com/AlexandreRouma/SDRPlusPlus/blob/6f747dad0d28964cb79e245c1069b165b0deaa54/core/src/dsp/noaa/hrpt.h)
+and [`noaa/tip.h`](https://github.com/AlexandreRouma/SDRPlusPlus/blob/6f747dad0d28964cb79e245c1069b165b0deaa54/core/src/dsp/noaa/tip.h).
+
+The other included sources are [GLFW 3.4](https://github.com/glfw/glfw/tree/3.4)
+and [David Rowe's Codec2 1.2.0](https://github.com/drowe67/codec2/tree/1.2.0).
+GLFW carries a local Wayland touch patch and a distinct library name;
+Codec2 supplies the shared library used by M17. SDR++'s bundled libcorrect,
+by Brian Armstrong, retains its BSD notice.
+
+The package recipe, local DSP/API adaptations, shutdown fix and GLFW touch
+changes are by Kostiantyn Andriiuk <konstantin@andriyuk.com>. The
+[recipe, patches and licence notices](packages/sdrpp-vince/README.md) accompany
+the complete source archives in the source bundle. Alpine supplies the
+unmodified runtime FFTW, VOLK, RtAudio and RTL-SDR libraries.
+
 ## Explicit non-sources
 
 - `ov02a10.c` was only a structural comparison; none of its sensor registers

@@ -5,6 +5,7 @@ for the Vince configuration:
 
 - [`linux-postmarketos-qcom-msm8953-r16`](linux-postmarketos-qcom-msm8953-r16/README.md);
 - [`postmarketos-vince-fm-radio`](postmarketos-vince-fm-radio/README.md);
+- [`sdrpp-vince`](sdrpp-vince/README.md);
 - [`alsa-ucm-conf-xiaomi-vince-tas2557`](alsa-ucm-conf-xiaomi-vince-tas2557/README.md);
 - [`firmware-xiaomi-vince-tas2557-local`](firmware-xiaomi-vince-tas2557-local/README.md);
 - [`libcamera-ipa-ov12a10`](libcamera-ipa-ov12a10/README.md);
@@ -23,6 +24,14 @@ entire upstream package directory here.
 The TAS2557 firmware package is the special case: its proprietary blob must be
 extracted from a legally obtained stock image and built locally. Neither the
 blob nor the resulting APK may be redistributed.
+
+## SDR++ application
+
+[`v2026.09.30-sdrpp`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.30-sdrpp)
+provides `sdrpp-vince-1.3.0_git20260704-r3.apk`, complete sources and checksums.
+It targets `aarch64`, postmarketOS `v26.06` / Alpine `3.24` and Plasma Mobile
+on Wayland. This is an optional USB-receiver application, not a kernel update;
+see the [installation guide](../fixes/sdrpp.md).
 
 ## Camera and Recorder source builds
 

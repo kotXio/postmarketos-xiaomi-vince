@@ -1,0 +1,8 @@
+{
+  "Radio": {
+    "device": "",
+    "devices": {
+      "Default ALSA Device": 48000
+    }
+  }
+}

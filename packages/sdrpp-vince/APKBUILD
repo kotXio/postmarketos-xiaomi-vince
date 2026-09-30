@@ -1,0 +1,174 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Maintainer: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+# Corresponds to the existing r3 binary; replacement sources are expressed
+# as decoder-compat.patch with the same resulting source content.
+pkgname=sdrpp-vince
+pkgver=1.3.0_git20260704
+pkgrel=3
+pkgdesc="SDR++ with amateur-radio decoders for Xiaomi Vince and RTL-SDR"
+arch="aarch64"
+url="https://github.com/AlexandreRouma/SDRPlusPlus"
+license="GPL-3.0-only AND LGPL-2.1-only AND Zlib"
+maintainer="Kostiantyn Andriiuk <konstantin@andriyuk.com>"
+options="!check"
+provides="sdrpp=$pkgver-r$pkgrel"
+depends="glfw"
+makedepends="
+	build-base
+	cmake
+	fftw-dev
+	glfw-dev
+	libxkbcommon-dev
+	librtlsdr-dev
+	libvolk-dev
+	mesa-dev
+	pkgconf
+	rtaudio-dev
+	wayland-dev
+	zstd-dev
+"
+source="
+	$pkgname-$pkgver.tar.gz
+	codec2-1.2.0.tar.gz
+	glfw-3.4.tar.gz
+	dab-volk-3.1-pointer.patch
+	glfw-wayland-touch.patch
+	sdrpp-vince-runtime.patch
+	decoder-compat.patch
+"
+builddir="$srcdir/$pkgname-$pkgver"
+
+prepare() {
+	patch -d "$builddir" -p1 < "$srcdir/dab-volk-3.1-pointer.patch"
+	patch -d "$builddir" -p1 < "$srcdir/sdrpp-vince-runtime.patch"
+	patch -d "$srcdir/glfw-3.4" -p1 < "$srcdir/glfw-wayland-touch.patch"
+	grep -Fx 'Exec=@CMAKE_INSTALL_PREFIX@/bin/sdrpp' \
+		"$builddir/sdrpp.desktop"
+	sed -i 's|^Exec=@CMAKE_INSTALL_PREFIX@/bin/sdrpp$|Exec=@CMAKE_INSTALL_PREFIX@/bin/sdrpp --autostart|' \
+		"$builddir/sdrpp.desktop"
+	grep -Fx 'Exec=@CMAKE_INSTALL_PREFIX@/bin/sdrpp --autostart' \
+		"$builddir/sdrpp.desktop"
+	patch -d "$builddir" -p1 < "$srcdir/decoder-compat.patch"
+}
+
+build() {
+	glfw_source="$srcdir/glfw-3.4"
+	glfw_build="$glfw_source/build"
+	glfw_prefix="$srcdir/glfw-prefix"
+	codec2_source="$srcdir/codec2-1.2.0"
+	codec2_build="$codec2_source/build"
+	codec2_prefix="$srcdir/codec2-prefix"
+
+	cmake -G "Unix Makefiles" -S "$glfw_source" -B "$glfw_build" \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_INSTALL_PREFIX="$glfw_prefix" \
+		-DCMAKE_INSTALL_LIBDIR=lib \
+		-DBUILD_SHARED_LIBS=ON \
+		-DGLFW_BUILD_X11=OFF \
+		-DGLFW_BUILD_WAYLAND=ON \
+		-DGLFW_BUILD_EXAMPLES=OFF \
+		-DGLFW_BUILD_TESTS=OFF \
+		-DGLFW_BUILD_DOCS=OFF
+	cmake --build "$glfw_build" --parallel 4
+	cmake --install "$glfw_build"
+	test -f "$glfw_prefix/lib/libglfw-vince.so.3.4"
+	test "$(readlink "$glfw_prefix/lib/libglfw-vince.so.3")" \
+		= libglfw-vince.so.3.4
+	grep -Fqx 'Libs: -L${libdir} -lglfw-vince' \
+		"$glfw_prefix/lib/pkgconfig/glfw3.pc"
+
+	cmake -G "Unix Makefiles" -S "$codec2_source" -B "$codec2_build" \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_INSTALL_PREFIX="$codec2_prefix" \
+		-DCMAKE_INSTALL_LIBDIR=lib \
+		-DBUILD_SHARED_LIBS=ON \
+		-DLPCNET=OFF \
+		-DUNITTEST=OFF
+	cmake --build "$codec2_build" --parallel 4
+	cmake --install "$codec2_build"
+	codec2_pc="$codec2_prefix/lib/pkgconfig/codec2.pc"
+	grep -Fx 'Cflags: -I${includedir} ' "$codec2_pc"
+	sed -i 's|^Cflags: -I${includedir} $|Cflags: -I${includedir} -I${includedir}/.. |' \
+		"$codec2_pc"
+	grep -Fx 'Cflags: -I${includedir} -I${includedir}/.. ' "$codec2_pc"
+
+	PKG_CONFIG_PATH="$glfw_prefix/lib/pkgconfig:$codec2_prefix/lib/pkgconfig" \
+	cmake -G "Unix Makefiles" -S "$builddir" -B "$builddir/build" \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DOPT_BACKEND_GLFW=ON \
+		-DOPT_BACKEND_ANDROID=OFF \
+		-DOPT_OVERRIDE_STD_FILESYSTEM=OFF \
+		-DOPT_BUILD_AIRSPY_SOURCE=OFF \
+		-DOPT_BUILD_AIRSPYHF_SOURCE=OFF \
+		-DOPT_BUILD_AUDIO_SOURCE=OFF \
+		-DOPT_BUILD_BADGESDR_SOURCE=OFF \
+		-DOPT_BUILD_BLADERF_SOURCE=OFF \
+		-DOPT_BUILD_DRAGONLABS_SOURCE=OFF \
+		-DOPT_BUILD_FILE_SOURCE=OFF \
+		-DOPT_BUILD_FOBOSSDR_SOURCE=OFF \
+		-DOPT_BUILD_HACKRF_SOURCE=OFF \
+		-DOPT_BUILD_HAROGIC_SOURCE=OFF \
+		-DOPT_BUILD_HERMES_SOURCE=OFF \
+		-DOPT_BUILD_HYDRASDR_SOURCE=OFF \
+		-DOPT_BUILD_KCSDR_SOURCE=OFF \
+		-DOPT_BUILD_LIMESDR_SOURCE=OFF \
+		-DOPT_BUILD_NETWORK_SOURCE=OFF \
+		-DOPT_BUILD_PERSEUS_SOURCE=OFF \
+		-DOPT_BUILD_PLUTOSDR_SOURCE=OFF \
+		-DOPT_BUILD_RFNM_SOURCE=OFF \
+		-DOPT_BUILD_RFSPACE_SOURCE=OFF \
+		-DOPT_BUILD_RTL_SDR_SOURCE=ON \
+		-DOPT_BUILD_RTL_TCP_SOURCE=OFF \
+		-DOPT_BUILD_SDRPP_SERVER_SOURCE=OFF \
+		-DOPT_BUILD_SDRPLAY_SOURCE=OFF \
+		-DOPT_BUILD_SOAPY_SOURCE=OFF \
+		-DOPT_BUILD_SPECTRAN_SOURCE=OFF \
+		-DOPT_BUILD_SPECTRAN_HTTP_SOURCE=OFF \
+		-DOPT_BUILD_SPYSERVER_SOURCE=OFF \
+		-DOPT_BUILD_USRP_SOURCE=OFF \
+		-DOPT_BUILD_ANDROID_AUDIO_SINK=OFF \
+		-DOPT_BUILD_AUDIO_SINK=ON \
+		-DOPT_BUILD_NETWORK_SINK=OFF \
+		-DOPT_BUILD_NEW_PORTAUDIO_SINK=OFF \
+		-DOPT_BUILD_PORTAUDIO_SINK=OFF \
+		-DOPT_BUILD_ATV_DECODER=ON \
+		-DOPT_BUILD_DAB_DECODER=ON \
+		-DOPT_BUILD_FALCON9_DECODER=OFF \
+		-DOPT_BUILD_KG_SSTV_DECODER=ON \
+		-DOPT_BUILD_M17_DECODER=ON \
+		-DOPT_BUILD_METEOR_DEMODULATOR=ON \
+		-DOPT_BUILD_PAGER_DECODER=ON \
+		-DOPT_BUILD_RADIO=ON \
+		-DOPT_BUILD_RYFI_DECODER=OFF \
+		-DOPT_BUILD_VOR_RECEIVER=ON \
+		-DOPT_BUILD_WEATHER_SAT_DECODER=ON \
+		-DOPT_BUILD_DISCORD_PRESENCE=OFF \
+		-DOPT_BUILD_FREQUENCY_MANAGER=ON \
+		-DOPT_BUILD_IQ_EXPORTER=OFF \
+		-DOPT_BUILD_RECORDER=ON \
+		-DOPT_BUILD_RIGCTL_CLIENT=OFF \
+		-DOPT_BUILD_RIGCTL_SERVER=OFF \
+		-DOPT_BUILD_SCANNER=ON \
+		-DOPT_BUILD_SCHEDULER=OFF \
+		-DUSE_INTERNAL_LIBCORRECT=ON \
+		-DUSE_BUNDLE_DEFAULTS=OFF
+	cmake --build "$builddir/build" --parallel 4
+}
+
+package() {
+	DESTDIR="$pkgdir" cmake --install "$builddir/build"
+	install -d "$pkgdir/usr/lib"
+	cp -a "$srcdir"/codec2-prefix/lib/libcodec2.so* "$pkgdir/usr/lib/"
+	cp -a "$srcdir"/glfw-prefix/lib/libglfw-vince.so* "$pkgdir/usr/lib/"
+}
+
+sha512sums="
+0751f622a1256cb63c7ad1e7bad256d7c0120e9306c5fec405b47e12feed95a3adf92fcf384b1b0f607b34b23ccd6efd2669ddcc476df3e1027e6e4c15eec3f3  sdrpp-vince-1.3.0_git20260704.tar.gz
+a44e6eb3ec60b81e4dfefaa733c4f8a40c5e2e90454e964b14fbce896edd0877e32d917ce878a619d7e7e544c670231d7d0c9cd35659be6989fd18d474443489  codec2-1.2.0.tar.gz
+39ad7a4521267fbebc35d2ff0c389a56236ead5fa4bdff33db113bd302f70f5f2869ff4e6db1979512e1542813292dff5a482e94dfce231750f0746c301ae9ed  glfw-3.4.tar.gz
+c24fb179c558a649836069771cf9e8bcc6667cbafa45243fa8715777b9e3b8e03dad9576490bf09c238a0e536cc3dd1be6e438f6bc1a328743698bd509de31f4  dab-volk-3.1-pointer.patch
+92ff5a916598ec927c1caa5af109257010da7dda247ea0d034b5f1c6ffa0dcc031ccd06f61166f86b2de4e9f758dd8417b7adbe95769c5a768d3bde6311b2b3b  glfw-wayland-touch.patch
+8abd27c9a0f262946b616b441820fe9114aeb6be01e93faaeed6c13a58a7b0d40e6d73e0b50d5ed2a6e851d22fc0309bd9efb7d90284b3d77ab1fca457899595  sdrpp-vince-runtime.patch
+5de390646eb811cd414f3b001beceaa4240f9956e45320772e81a1e8f3816d22c562e61900cc345546faef049454dfe98346e958bf6033d032a6ab645fae6db0  decoder-compat.patch
+"

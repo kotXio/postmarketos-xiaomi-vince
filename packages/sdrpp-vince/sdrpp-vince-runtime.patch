@@ -1,0 +1,22 @@
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Subject: [PATCH] Stop reception before unloading SDR++ modules
+
+Let the source close the USB receiver during normal application shutdown.
+
+Base: SDR++ 8c9f5ee8fe405775bfcd62c8c8f8c0fc928a64af
+SPDX-License-Identifier: GPL-3.0-only
+
+diff --git a/core/src/core.cpp b/core/src/core.cpp
+--- a/core/src/core.cpp
++++ b/core/src/core.cpp
+@@ -404,6 +404,9 @@ int sdrpp_main(int argc, char* argv[]) {
+-
++
+     // On android, none of this shutdown should happen due to the way the UI works
+ #ifndef __ANDROID__
++    // Stop the active source before unloading modules so device cleanup runs.
++    gui::mainWindow.setPlayState(false);
++
+     // Shut down all modules
+     for (auto& [name, mod] : core::moduleManager.modules) {
+         mod.end();

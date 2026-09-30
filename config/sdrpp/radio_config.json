@@ -1,0 +1,17 @@
+{
+  "Radio": {
+    "WFM": {
+      "FMIFNREnabled": false,
+      "bandwidth": 150000.0,
+      "deempMode": "50us",
+      "highPass": false,
+      "noiseBlankerEnabled": false,
+      "noiseBlankerLevel": 1.0,
+      "snapInterval": 100000.0,
+      "squelchEnabled": false,
+      "squelchLevel": -100.0,
+      "squelchMode": "off"
+    },
+    "selectedDemodId": 1
+  }
+}

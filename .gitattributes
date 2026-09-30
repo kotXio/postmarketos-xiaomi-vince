@@ -1,1 +1,4 @@
 *.patch -whitespace
+
+# Preserve the upstream licence texts verbatim.
+packages/sdrpp-vince/licenses/*.txt -whitespace

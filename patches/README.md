@@ -30,6 +30,10 @@ configuration, not a claim that every patch is ready for upstream acceptance.
 Patch checksums are listed in [`SHA256SUMS`](SHA256SUMS).
 For the cumulative kernel, follow the [build instructions](BUILDING.md).
 
+The four [SDR++ and GLFW patches](../packages/sdrpp-vince/README.md) live with
+their standalone APKBUILD. Their source checksums are part of that recipe;
+they do not belong to the cumulative kernel series.
+
 The LTR579 series is not part of the generic cumulative kernel. Both tested
 optical-sensor variants report part ID `0xb1`, so its Device Tree patch must be
 used only after confirming the fitted sensor independently. See the
