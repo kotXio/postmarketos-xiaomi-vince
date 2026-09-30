@@ -41,7 +41,8 @@ This implements one-shot contrast AF at rear-session start. It is not
 continuous AF, touch-to-focus, PDAF, face detection or calibrated manual focus
 distance. A low-detail scene can correctly finish as `AfStateFailed`.
 
-Plasma Camera's approximately `4.12 fps`, timestamp-imperfect, no-audio encoded
-video result is a separate Qt Multimedia/application limitation. Native RAW and
-processed libcamera paths reached their expected rates; the autofocus patch
-does not change the recorder path.
+The released Plasma Camera `r6` build recorded at approximately `4.12 fps`
+without audio, although direct libcamera capture reached its expected rates.
+The later [r15 / Qt Multimedia recording update](plasma-camera-video.md)
+adds about 30 fps rear video with Mic2 sound. It is a separate source build,
+not part of the autofocus release.

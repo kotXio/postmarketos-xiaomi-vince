@@ -1,0 +1,19 @@
+Subject: [PATCH] Include sys/select.h for timeval on musl
+
+From Alpine's qt6-qtmultimedia select.patch at aports snapshot
+98335a210042e9ed5058521c60378805b19a83b3. Only the unchanged context
+is refreshed for the Qt 6.11.1 release archive; the include fix is unchanged.
+Source: https://github.com/alpinelinux/aports/blob/98335a210042e9ed5058521c60378805b19a83b3/community/qt6-qtmultimedia/select.patch
+
+diff --git a/src/plugins/multimedia/ffmpeg/qv4l2camera_p.h b/src/plugins/multimedia/ffmpeg/qv4l2camera_p.h
+--- a/src/plugins/multimedia/ffmpeg/qv4l2camera_p.h
++++ b/src/plugins/multimedia/ffmpeg/qv4l2camera_p.h
+@@ -18,6 +18,8 @@
+ #include <QtMultimedia/private/qplatformcamera_p.h>
+ #include <sys/time.h>
+ 
++#include <sys/select.h>
++
+ QT_BEGIN_NAMESPACE
+ 
+ class QV4L2FileDescriptor;

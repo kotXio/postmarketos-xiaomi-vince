@@ -1,0 +1,8 @@
+0001-select-header.patch
+0002-v4l2m2m-encoder-opt-in.patch
+0003-v4l2m2m-packet-detach.patch
+0004-v4l2m2m-packet-defer.patch
+0005-audio-pcm-trace.patch
+0006-pulseaudio-record-latency.patch
+0007-pulseaudio-record-maxlength.patch
+0008-v4l2m2m-quality-bitrate.patch

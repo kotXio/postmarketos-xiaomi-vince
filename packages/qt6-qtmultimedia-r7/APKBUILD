@@ -1,0 +1,134 @@
+# The group tag is just to easily find this APKBUILD by some scripts for automation
+# group=qt6
+# Based on the Alpine recipe maintained by Bart Ribbers <bribbers@disroot.org>.
+# Contributor: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+maintainer="Kostiantyn Andriiuk <konstantin@andriyuk.com>"
+pkgname=qt6-qtmultimedia
+pkgver=6.11.1
+pkgrel=7
+pkgdesc="Classes for audio, video, radio and camera functionality"
+url="https://qt.io/"
+arch="all"
+license="LGPL-2.1-only AND LGPL-3.0-only AND GPL-3.0-only AND Qt-GPL-exception-1.0"
+depends_dev="
+	$pkgname-ffmpeg=$pkgver-r$pkgrel
+	$pkgname-gstreamer=$pkgver-r$pkgrel
+	alsa-lib-dev
+	ffmpeg-dev
+	gst-plugins-bad-dev
+	gst-plugins-base-dev
+	gstreamer-dev
+	libva-glx-dev
+	libxrandr-dev
+	pulseaudio-dev
+	qt6-qtbase-dev
+	qt6-qtbase-private-dev
+	qt6-qtshadertools-dev
+	qt6-qtsvg-dev
+	"
+makedepends="$depends_dev
+	cmake
+	perl
+	samurai
+	"
+case "$CARCH" in
+	armhf) ;;
+	*)
+		depends_dev="$depends_dev qt6-qtdeclarative-dev"
+		makedepends="$makedepends
+			qt6-qtdeclarative-dev
+			qt6-qtdeclarative-private-dev
+			"
+		;;
+esac
+subpackages="
+	$pkgname-dbg
+	$pkgname-dev
+	$pkgname-ffmpeg
+	$pkgname-gstreamer
+	"
+
+case $pkgver in
+	*_alpha*|*_beta*|*_rc*) _rel=development_releases;;
+	*) _rel=official_releases;;
+esac
+
+source="https://download.qt.io/$_rel/qt/${pkgver%.*}/${pkgver/_/-}/submodules/qtmultimedia-everywhere-src-${pkgver/_/-}.tar.xz
+	../../patches/qtmultimedia/0001-select-header.patch
+	../../patches/qtmultimedia/0002-v4l2m2m-encoder-opt-in.patch
+	../../patches/qtmultimedia/0003-v4l2m2m-packet-detach.patch
+	../../patches/qtmultimedia/0004-v4l2m2m-packet-defer.patch
+	../../patches/qtmultimedia/0005-audio-pcm-trace.patch
+	../../patches/qtmultimedia/0006-pulseaudio-record-latency.patch
+	../../patches/qtmultimedia/0007-pulseaudio-record-maxlength.patch
+	../../patches/qtmultimedia/0008-v4l2m2m-quality-bitrate.patch
+	"
+builddir="$srcdir/qtmultimedia-everywhere-src-${pkgver/_/-}"
+
+build() {
+	# alsa disabled due to build failure for now
+	# src/multimedia/platform/alsa/qalsaaudiosink.cpp:270:5: error: 'timeStamp' was not declared in this scope
+	export CFLAGS="$CFLAGS -g1 -flto=auto"
+	export CXXFLAGS="$CXXFLAGS -g1 -flto=auto"
+	cmake -B build -G Ninja \
+		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DINSTALL_BINDIR=lib/qt6/bin \
+		-DINSTALL_DOCDIR=share/doc/qt6 \
+		-DINSTALL_ARCHDATADIR=lib/qt6 \
+		-DINSTALL_DATADIR=share/qt6 \
+		-DINSTALL_INCLUDEDIR=include/qt6 \
+		-DINSTALL_MKSPECSDIR=lib/qt6/mkspecs \
+		-DINSTALL_EXAMPLESDIR=share/doc/qt6/examples \
+		-DQT_BUILD_TESTS=ON \
+		-DQT_BUILD_TESTS_BY_DEFAULT=OFF \
+		-DQT_FEATURE_alsa=OFF \
+		-DQT_FEATURE_pulseaudio=ON
+	cmake --build build --parallel
+}
+
+check() {
+	cmake --build build --target tst_qffmpegvideoencoderutils --parallel
+	QT_QPA_PLATFORM=offscreen \
+		build/tests/auto/unit/plugins/multimedia/ffmpeg/qffmpegvideoencoderutils/tst_qffmpegvideoencoderutils
+}
+
+package() {
+	DESTDIR="$pkgdir" cmake --install build
+}
+
+dev() {
+	default_dev
+
+	amove usr/lib/qt6/sbom
+}
+
+ffmpeg() {
+	pkgdesc="$pkgdesc (ffmpeg plugin)"
+	# autopull if main dep exists anyway
+	install_if="$pkgname=$pkgver-r$pkgrel ffmpeg-libavcodec"
+
+	amove usr/lib/qt6/plugins/multimedia/libffmpegmediaplugin.so
+}
+
+gstreamer() {
+	pkgdesc="$pkgdesc (gstreamer plugin)"
+	# unlike above, these deps are not that obvious.
+	# -base is pulled by e.g. gtk4 anyway, but practically nothing
+	# would use this unless people added good, etc. so use that
+	install_if="$pkgname=$pkgver-r$pkgrel gst-plugins-good"
+
+	amove usr/lib/qt6/plugins/multimedia/libgstreamermediaplugin.so
+}
+
+sha512sums="
+accd9534b96df8ff464c219bf579c3da43e30b33efb35fc7e311c9e133cb57252f433422ca917f83b738e67cf925b19e0847ffcfaa92fe0e3d21b603dd580cd5  qtmultimedia-everywhere-src-6.11.1.tar.xz
+b98504603518a580942d127e6a623a2902f5dae84298e9b72ca28f62ac817916b42bc0cdfa4d1e4962f932a7ca0531383f967220c60b13c4cf12cf3584ce525b  ../../patches/qtmultimedia/0001-select-header.patch
+056ad8e6f84275d0be77f8a4b71f6605335e515a0ee32e2bb58acc76c93605eae59f9f7139ec6b1b16693bc51b66e66cd6c312f609f88a81618d6da70b96b528  ../../patches/qtmultimedia/0002-v4l2m2m-encoder-opt-in.patch
+2624f1dc91e2146ceb97dbcaa9364cffe08b932c32fbcbf46d943424d1b2af46509d427ac48db692bdc262035c82688f3bc7ced94db3a8ca5f5899b06e754f98  ../../patches/qtmultimedia/0003-v4l2m2m-packet-detach.patch
+a63cf54f91216c6a804eff72ba06bd705a4607dd2d8a9ab0ab4c8ce4ebc935de70fde6e62f9385695fcbe1ee231944b7604869e6d01aa7ec6a944ece6e4623d2  ../../patches/qtmultimedia/0004-v4l2m2m-packet-defer.patch
+476b67fac15bd44cc8cbbc89dbd7d685a2372dbee5ece4f0825dea7b23af2634a3a87761f3c5ecc36036222999e08eeb8b8f5b3604b46c99d4529762a6b00ba9  ../../patches/qtmultimedia/0005-audio-pcm-trace.patch
+3fd7e1810bf6f7fafd4be5c80bef2bd3d5ef9b344c2df41953e96ad6fcb469449a6ec8f078ac20757de52f78539c95d00c8708ed3decf5653f7c0fe8cba5bd3e  ../../patches/qtmultimedia/0006-pulseaudio-record-latency.patch
+6bed022d91001503916344ffc723256dda778cc96146a2ead4a0e775a049d23eb6c7a4e197794ddb5c0f11d5b5ba75cdfd9e9fa9a226307889d1e8ee715c9482  ../../patches/qtmultimedia/0007-pulseaudio-record-maxlength.patch
+e149ff7297d6828ccdcaf2bdcce9c5c6cf8c62992b681602265727357f7be7d5d8d7b38099a7d4359d0bb9bd4de03d4f05c60c40fb71b494f4d5949a9ab90ad0  ../../patches/qtmultimedia/0008-v4l2m2m-quality-bitrate.patch
+"

@@ -10,3 +10,7 @@ movement remain in libcamera and the kernel actuator driver.
 
 See the [application patch](../../patches/plasma-camera/README.md) and
 [autofocus guide](../../fixes/ov12a10-autofocus.md).
+
+This is the released `2.1.1-r6` build. The later experimental recording update
+has its own [r15 recipe](../plasma-camera-r15/README.md) and
+[video guide](../../fixes/plasma-camera-video.md).

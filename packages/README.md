@@ -24,6 +24,15 @@ The TAS2557 firmware package is the special case: its proprietary blob must be
 extracted from a legally obtained stock image and built locally. Neither the
 blob nor the resulting APK may be redistributed.
 
+## Camera and Recorder source builds
+
+The [Plasma Camera r15 recipe](plasma-camera-r15/README.md) and
+[Qt Multimedia r7 recipe](qt6-qtmultimedia-r7/README.md) add rear video at about
+30 fps with Mic2 sound. The same Qt build fixes
+[KRecorder](../fixes/krecorder.md) through a launcher override, without a
+custom KRecorder APK. These source builds are separate from the binary release
+sequence below; see [Camera setup](../fixes/plasma-camera-video.md).
+
 ## Public installation order
 
 The kernel updates are cumulative but their accompanying userspace packages

@@ -1,0 +1,64 @@
+From d61758848baa1da823eef88c1d306191563ad7a8 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Mon, 7 Sep 2026 18:33:00 +0300
+Subject: [PATCH] Add opt-in PulseAudio record latency control
+
+---
+ .../pulseaudio/qpulseaudiosource.cpp          | 30 +++++++++++++++++--
+ 1 file changed, 28 insertions(+), 2 deletions(-)
+
+diff --git a/src/multimedia/pulseaudio/qpulseaudiosource.cpp b/src/multimedia/pulseaudio/qpulseaudiosource.cpp
+index e3e29da..52416f1 100644
+--- a/src/multimedia/pulseaudio/qpulseaudiosource.cpp
++++ b/src/multimedia/pulseaudio/qpulseaudiosource.cpp
+@@ -21,6 +21,14 @@ bool vinceAudioShouldTrace(uint64_t count)
+ {
+     return count <= 16 || count % 128 == 0;
+ }
++
++bool vinceDisableRecordLatencyAdjustment()
++{
++    // Keep the upstream default unless a problematic PulseAudio capture source is tested explicitly.
++    static const bool disabled =
++            qEnvironmentVariableIntValue("QT_PULSEAUDIO_RECORD_DISABLE_ADJUST_LATENCY") != 0;
++    return disabled;
++}
+ } // namespace
+ 
+ QPulseAudioSourceStream::QPulseAudioSourceStream(QAudioDevice device, const QAudioFormat &format,
+@@ -158,8 +166,16 @@ bool QPulseAudioSourceStream::startStream(StreamType streamType)
+                 : uint32_t(m_format.bytesForFrames(m_hardwareBufferFrames.value_or(1024))),
+     };
+ 
+-    constexpr pa_stream_flags flags =
+-            pa_stream_flags(PA_STREAM_AUTO_TIMING_UPDATE | PA_STREAM_ADJUST_LATENCY);
++    const bool disableLatencyAdjustment = vinceDisableRecordLatencyAdjustment();
++    const pa_stream_flags flags = pa_stream_flags(PA_STREAM_AUTO_TIMING_UPDATE
++                                                  | (disableLatencyAdjustment
++                                                             ? PA_STREAM_NOFLAGS
++                                                             : PA_STREAM_ADJUST_LATENCY));
++
++    qCDebug(qLcPulseAudioIn).nospace()
++            << "[VINCE-AUDIO-r16] Pulse connect requested maxlength=" << attr.maxlength
++            << " fragsize=" << attr.fragsize
++            << " adjustLatency=" << !disableLatencyAdjustment;
+ 
+     std::lock_guard engineLock{ *pulseEngine };
+     installCallbacks(streamType);
+@@ -205,6 +221,16 @@ void QPulseAudioSourceStream::uninstallCallbacks()
+ void QPulseAudioSourceStream::readCallbackRingbuffer([[maybe_unused]] size_t bytesToRead)
+ {
+     const uint64_t call = ++m_vinceReadCallbackCount;
++    if (call == 1) {
++        if (const pa_buffer_attr *actual = pa_stream_get_buffer_attr(m_stream.get())) {
++            qCDebug(qLcPulseAudioIn).nospace()
++                    << "[VINCE-AUDIO-r16] Pulse connect actual maxlength=" << actual->maxlength
++                    << " fragsize=" << actual->fragsize;
++        } else {
++            qCWarning(qLcPulseAudioIn)
++                    << "[VINCE-AUDIO-r16] pa_stream_get_buffer_attr() failed";
++        }
++    }
+     const void *data{};
+     size_t nBytes{};
+     int status = pa_stream_peek(m_stream.get(), &data, &nBytes);

@@ -1,0 +1,2113 @@
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Subject: [PATCH] Add native-source video recording and paced preview
+
+Cumulative change from the one-shot autofocus build to the tested r15 source.
+Includes the intermediate preview, full-resolution still and tap-refocus
+changes required by that source tree, without replaying superseded experiments.
+
+Base: c43aef4dd36fbc70528869ad7d30ce01252a045f
+Result: 94a6e0e87754b21bc289c1e04090e57e9b3053d0
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index e4793decc0df497bb40c4e7064c87cbaa3527699..13418497a094ec354364289f5f11599f938311a0 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -14,6 +14,9 @@ set(plasma-camera_SRCS
+     plasmacamera/settings.cpp
+     plasmacamera/worker.cpp
+     plasmacamera/autofocuspolicy.h
++    plasmacamera/stillcapturepolicy.h
++    plasmacamera/videoframesubmissionpolicy.h
++    plasmacamera/videostreampolicy.h
+     resources.qrc
+ )
+ 
+@@ -45,6 +48,21 @@ if(BUILD_TESTING AND NOT ANDROID)
+     )
+     target_link_libraries(plasma-camera-autofocus-test PkgConfig::LIBCAMERA)
+     add_test(NAME plasma-camera-autofocus COMMAND plasma-camera-autofocus-test)
++
++    add_executable(plasma-camera-still-capture-test
++        tests/stillcapturepolicytest.cpp
++    )
++    add_test(NAME plasma-camera-still-capture COMMAND plasma-camera-still-capture-test)
++
++    add_executable(plasma-camera-video-frame-submission-test
++        tests/videoframesubmissionpolicytest.cpp
++    )
++    add_test(NAME plasma-camera-video-frame-submission COMMAND plasma-camera-video-frame-submission-test)
++
++    add_executable(plasma-camera-video-stream-test
++        tests/videostreampolicytest.cpp
++    )
++    add_test(NAME plasma-camera-video-stream COMMAND plasma-camera-video-stream-test)
+ endif()
+ 
+ kconfig_add_kcfg_files(plasma-camera GENERATE_MOC camerasettings.kcfgc)
+diff --git a/src/contents/ui/camera/Viewfinder.qml b/src/contents/ui/camera/Viewfinder.qml
+index 405c20e1a7829f6e399228b778af6b2cd84a3877..730a27eccefd58041c4fc7838c9276fa199a082e 100644
+--- a/src/contents/ui/camera/Viewfinder.qml
++++ b/src/contents/ui/camera/Viewfinder.qml
+@@ -35,4 +35,20 @@ Rectangle {
+         width: parent.width
+         height: parent.height
+     }
+-}
+\ No newline at end of file
++
++    MouseArea {
++        anchors.fill: viewfinder
++        enabled: root.camera.available && !root.camera.busy
++
++        onClicked: (mouse) => {
++            const content = viewfinder.contentRect;
++            const insideImage = mouse.x >= content.x
++                && mouse.x < content.x + content.width
++                && mouse.y >= content.y
++                && mouse.y < content.y + content.height;
++            if (insideImage) {
++                root.camera.triggerAutofocus();
++            }
++        }
++    }
++}
+diff --git a/src/plasmacamera.cpp b/src/plasmacamera.cpp
+index 412cb287dafaec80c2dc78001aea2adab491ed0a..a48ca069ab78012550df7362d8381a0fbd165449 100644
+--- a/src/plasmacamera.cpp
++++ b/src/plasmacamera.cpp
+@@ -59,9 +59,28 @@ PlasmaCamera::PlasmaCamera(QObject *parent) : QObject(parent)
+         // Finished taking image
+         setBusy(false);
+     });
++    connect(m_cameraWorker, &Worker::videoRecordingStreamReady, this, [this](const QSize &actualSize) {
++        setBusy(false);
++        Q_EMIT videoRecordingStreamReady(actualSize);
++    });
++    connect(m_cameraWorker, &Worker::videoRecordingStreamFailed, this, [this]() {
++        setBusy(false);
++        Q_EMIT videoRecordingStreamFailed();
++    });
++    connect(m_cameraWorker, &Worker::viewFinderRestoredAfterVideo, this, [this](const QSize &actualSize) {
++        setBusy(false);
++        Q_EMIT viewFinderRestoredAfterVideo(actualSize);
++    });
++    connect(m_cameraWorker, &Worker::viewFinderRestoreAfterVideoFailed, this, [this]() {
++        setBusy(false);
++        Q_EMIT viewFinderRestoreAfterVideoFailed();
++    });
+ 
+     // get errors from the camera worker
+     connect(m_cameraWorker, &Worker::errorOccurred, this, &PlasmaCamera::setError);
++    connect(m_cameraWorker, &Worker::errorOccurred, this, [this]() {
++        setBusy(false);
++    });
+ 
+     // send new settings to the camera worker
+     connect(this, &PlasmaCamera::settingsChanged, m_cameraWorker, &Worker::setSettings);
+@@ -177,7 +196,7 @@ QCameraFormat PlasmaCamera::cameraFormat() const
+ 
+ bool PlasmaCamera::captureImage()
+ {
+-    if (m_state != State::Running) {
++    if (m_state != State::Running || m_busy) {
+         return false;
+     }
+ 
+@@ -187,6 +206,54 @@ bool PlasmaCamera::captureImage()
+     return true;
+ }
+ 
++bool PlasmaCamera::prepareVideoRecording(const QSize &outputSize)
++{
++    if (m_state != State::Running || m_busy || !outputSize.isValid()) {
++        return false;
++    }
++
++    setBusy(true);
++    QMetaObject::invokeMethod(
++        m_cameraWorker,
++        "prepareVideoRecording",
++        Qt::QueuedConnection,
++        Q_ARG(QSize, outputSize));
++    return true;
++}
++
++bool PlasmaCamera::restoreViewFinderAfterVideo()
++{
++    if (m_state != State::Running || m_busy) {
++        return false;
++    }
++
++    setBusy(true);
++    QMetaObject::invokeMethod(
++        m_cameraWorker,
++        "restoreViewFinderAfterVideo",
++        Qt::QueuedConnection);
++    return true;
++}
++
++bool PlasmaCamera::triggerAutofocus()
++{
++    if (m_state != State::Running || m_busy || !m_camera) {
++        return false;
++    }
++
++    const std::optional<int> location = m_camera->properties().get(libcamera::properties::Location);
++    const bool rearCamera = location && *location == libcamera::properties::CameraLocationBack;
++
++    OneShotAutofocusPolicy capability;
++    capability.beginSession(rearCamera, m_camera->controls());
++    if (!capability.supported()) {
++        return false;
++    }
++
++    QMetaObject::invokeMethod(m_cameraWorker, "triggerAutofocus", Qt::QueuedConnection);
++    return true;
++}
++
+ QSize PlasmaCamera::afWindow() const
+ {
+     return m_settings.getAfWindow();
+diff --git a/src/plasmacamera.h b/src/plasmacamera.h
+index 55b394ca03412d7cf0534849146325721c96a151..dc21278070e672529c2d13a80cf31c53ef6df968 100644
+--- a/src/plasmacamera.h
++++ b/src/plasmacamera.h
+@@ -142,6 +142,25 @@ public:
+      */
+     bool captureImage();
+ 
++    /*!
++     * Reconfigure the single processed stream for a selected video output.
++     * Completion is asynchronous and reported by videoRecordingStreamReady().
++     */
++    bool prepareVideoRecording(const QSize &outputSize);
++
++    /*!
++     * Restore the accepted bounded preview after video recording.
++     * Completion is asynchronous and does not retrigger startup autofocus.
++     */
++    bool restoreViewFinderAfterVideo();
++
++    /*!
++     * Queue one bounded autofocus scan for the active rear camera.
++     * Returns false when the camera is unavailable, busy or has no supported
++     * Auto/Trigger controls.
++     */
++    Q_INVOKABLE bool triggerAutofocus();
++
+     // Focus
+     QSize afWindow() const;
+ 
+@@ -176,12 +195,14 @@ Q_SIGNALS:
+     void busyChanged();
+ 
+     // Photos
+-    /*
+-     * While it would make the most sense to switch the libcamera config to StillCapture
+-     * for higher quality capture it requires restarting the camera which is simply too slow
+-     */
++    // Still capture briefly reconfigures the active camera at full resolution,
++    // then restores the bounded viewfinder stream without restarting autofocus.
+     void viewFinderFrame(const QImage &frame); // connect to this to get new frames
+     void stillCaptureFrames(const QQueue<QImage> &frames); // connect to this to get captures
++    void videoRecordingStreamReady(const QSize &actualSize);
++    void videoRecordingStreamFailed();
++    void viewFinderRestoredAfterVideo(const QSize &actualSize);
++    void viewFinderRestoreAfterVideoFailed();
+ 
+     // Focus
+     void afWindowChanged(const QSize &newAfWindow);
+diff --git a/src/plasmacamera/autofocuspolicy.h b/src/plasmacamera/autofocuspolicy.h
+index 37b0263c165288fccb2e922b50b6d59253b65c60..a6cf86fedb741615dc463888fe38d9fdd83798ef 100644
+--- a/src/plasmacamera/autofocuspolicy.h
++++ b/src/plasmacamera/autofocuspolicy.h
+@@ -10,33 +10,81 @@
+ #include <libcamera/control_ids.h>
+ #include <libcamera/controls.h>
+ 
+-class StartupAutofocusPolicy
++class OneShotAutofocusPolicy
+ {
+ public:
++    enum class TriggerSource {
++        None,
++        Startup,
++        Touch,
++    };
++
+     void beginSession(bool rearCamera, const libcamera::ControlInfoMap &controls)
+     {
+         supported_ = rearCamera
+             && supportsValue(controls, libcamera::controls::AfMode, libcamera::controls::AfModeAuto)
+             && supportsValue(controls, libcamera::controls::AfTrigger, libcamera::controls::AfTriggerStart);
+-        pending_ = supported_;
++        pending_ = supported_ ? TriggerSource::Startup : TriggerSource::None;
++        inProgress_ = false;
++        sawScanning_ = false;
+     }
+ 
+     void endSession()
+     {
+         supported_ = false;
+-        pending_ = false;
++        cancelCycle();
+     }
+ 
+-    bool apply(libcamera::ControlList &controls)
++    bool requestTouchTrigger()
+     {
+-        if (!pending_) {
++        if (!supported_ || pending_ != TriggerSource::None || inProgress_) {
+             return false;
+         }
+ 
++        pending_ = TriggerSource::Touch;
++        return true;
++    }
++
++    TriggerSource apply(libcamera::ControlList &controls)
++    {
++        if (pending_ == TriggerSource::None) {
++            return TriggerSource::None;
++        }
++
++        const TriggerSource source = pending_;
+         controls.set(libcamera::controls::AfMode, libcamera::controls::AfModeAuto);
+         controls.set(libcamera::controls::AfTrigger, libcamera::controls::AfTriggerStart);
+-        pending_ = false;
+-        return true;
++        pending_ = TriggerSource::None;
++        inProgress_ = true;
++        sawScanning_ = false;
++        return source;
++    }
++
++    void observeState(int32_t state)
++    {
++        if (!inProgress_) {
++            return;
++        }
++
++        if (state == libcamera::controls::AfStateScanning) {
++            sawScanning_ = true;
++            return;
++        }
++
++        if (sawScanning_
++            && (state == libcamera::controls::AfStateFocused
++                || state == libcamera::controls::AfStateFailed
++                || state == libcamera::controls::AfStateIdle)) {
++            inProgress_ = false;
++            sawScanning_ = false;
++        }
++    }
++
++    void cancelCycle()
++    {
++        pending_ = TriggerSource::None;
++        inProgress_ = false;
++        sawScanning_ = false;
+     }
+ 
+     bool supported() const
+@@ -46,7 +94,12 @@ public:
+ 
+     bool pending() const
+     {
+-        return pending_;
++        return pending_ != TriggerSource::None;
++    }
++
++    bool inProgress() const
++    {
++        return inProgress_;
+     }
+ 
+ private:
+@@ -68,5 +121,7 @@ private:
+     }
+ 
+     bool supported_ = false;
+-    bool pending_ = false;
++    TriggerSource pending_ = TriggerSource::None;
++    bool inProgress_ = false;
++    bool sawScanning_ = false;
+ };
+diff --git a/src/plasmacamera/stillcapturepolicy.h b/src/plasmacamera/stillcapturepolicy.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..9acfc1db141fe8a1481fb1d73593a456e848630a
+--- /dev/null
++++ b/src/plasmacamera/stillcapturepolicy.h
+@@ -0,0 +1,81 @@
++// SPDX-FileCopyrightText: 2026 Kostiantyn Andriiuk
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#pragma once
++
++class StillCapturePolicy
++{
++public:
++    enum class FrameDecision {
++        Ignore,
++        Skip,
++        CaptureAndRestore,
++    };
++
++    static constexpr unsigned int maximumViewfinderWidth()
++    {
++        return 952;
++    }
++
++    static constexpr unsigned int maximumViewfinderHeight()
++    {
++        return 540;
++    }
++
++    bool beginCapture()
++    {
++        if (phase_ != Phase::Viewfinder) {
++            return false;
++        }
++
++        phase_ = Phase::StillCapture;
++        framesSeen_ = 0;
++        return true;
++    }
++
++    FrameDecision consumeStillFrame()
++    {
++        if (phase_ != Phase::StillCapture) {
++            return FrameDecision::Ignore;
++        }
++
++        ++framesSeen_;
++        if (framesSeen_ <= warmupFrames_) {
++            return FrameDecision::Skip;
++        }
++
++        phase_ = Phase::RestoringViewfinder;
++        return FrameDecision::CaptureAndRestore;
++    }
++
++    void viewfinderRestored()
++    {
++        if (phase_ == Phase::RestoringViewfinder) {
++            phase_ = Phase::Viewfinder;
++            framesSeen_ = 0;
++        }
++    }
++
++    void reset()
++    {
++        phase_ = Phase::Viewfinder;
++        framesSeen_ = 0;
++    }
++
++    bool captureInProgress() const
++    {
++        return phase_ != Phase::Viewfinder;
++    }
++
++private:
++    enum class Phase {
++        Viewfinder,
++        StillCapture,
++        RestoringViewfinder,
++    };
++
++    static constexpr unsigned int warmupFrames_ = 4;
++
++    Phase phase_ = Phase::Viewfinder;
++    unsigned int framesSeen_ = 0;
++};
+diff --git a/src/plasmacamera/videoframesubmissionpolicy.h b/src/plasmacamera/videoframesubmissionpolicy.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..6e372dd31a5812e54c87eb9cd0840e8670d890b2
+--- /dev/null
++++ b/src/plasmacamera/videoframesubmissionpolicy.h
+@@ -0,0 +1,114 @@
++// SPDX-FileCopyrightText: 2026 Kostiantyn Andriiuk
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#pragma once
++
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <optional>
++
++class VideoFrameSubmissionPolicy
++{
++public:
++    struct PendingFrame {
++        std::uint64_t sequence;
++        std::int64_t startTimeUs;
++        std::int64_t endTimeUs;
++    };
++
++    void startSession(double frameRate)
++    {
++        recording_ = true;
++        pending_ = false;
++        recordingPreviewFrameIndex_ = 0;
++        firstSubmittedCaptureTimeUs_.reset();
++        lastSubmittedSequence_.reset();
++        lastStartTimeUs_ = -1;
++        frameDurationUs_ = std::max<std::int64_t>(
++            1, std::llround(1'000'000.0 / std::max(frameRate, 1.0)));
++    }
++
++    void stopSession()
++    {
++        recording_ = false;
++        pending_ = false;
++        recordingPreviewFrameIndex_ = 0;
++    }
++
++    bool shouldPresentPreview()
++    {
++        if (!recording_) {
++            return true;
++        }
++
++        // Keep a usable recording preview without letting QML/KWin
++        // presentation compete with every frame submitted to the encoder.
++        const bool shouldPresent = recordingPreviewFrameIndex_ == 0;
++        recordingPreviewFrameIndex_ =
++            (recordingPreviewFrameIndex_ + 1) % recordingPreviewIntervalFrames_;
++        return shouldPresent;
++    }
++
++    bool offerFrame(std::uint64_t sequence, std::int64_t captureTimeUs)
++    {
++        if (!recording_
++            || (lastSubmittedSequence_ && sequence == *lastSubmittedSequence_)
++            || (pending_ && sequence == pendingSequence_)) {
++            return false;
++        }
++
++        pending_ = true;
++        pendingSequence_ = sequence;
++        pendingCaptureTimeUs_ = captureTimeUs;
++        return true;
++    }
++
++    std::optional<PendingFrame> pendingFrame() const
++    {
++        if (!recording_ || !pending_) {
++            return std::nullopt;
++        }
++
++        std::int64_t startTimeUs = 0;
++        if (firstSubmittedCaptureTimeUs_) {
++            startTimeUs = std::max(
++                pendingCaptureTimeUs_ - *firstSubmittedCaptureTimeUs_,
++                lastStartTimeUs_ + 1);
++        }
++
++        return PendingFrame{
++            pendingSequence_,
++            startTimeUs,
++            startTimeUs + frameDurationUs_ - 1,
++        };
++    }
++
++    void frameSubmitted()
++    {
++        const std::optional<PendingFrame> frame = pendingFrame();
++        if (!frame) {
++            return;
++        }
++
++        if (!firstSubmittedCaptureTimeUs_) {
++            firstSubmittedCaptureTimeUs_ = pendingCaptureTimeUs_;
++        }
++        lastSubmittedSequence_ = pendingSequence_;
++        lastStartTimeUs_ = frame->startTimeUs;
++        pending_ = false;
++    }
++
++private:
++    static constexpr std::uint64_t recordingPreviewIntervalFrames_ = 6;
++
++    bool recording_ = false;
++    bool pending_ = false;
++    std::uint64_t recordingPreviewFrameIndex_ = 0;
++    std::uint64_t pendingSequence_ = 0;
++    std::int64_t pendingCaptureTimeUs_ = 0;
++    std::int64_t frameDurationUs_ = 1;
++    std::int64_t lastStartTimeUs_ = -1;
++    std::optional<std::int64_t> firstSubmittedCaptureTimeUs_;
++    std::optional<std::uint64_t> lastSubmittedSequence_;
++};
+diff --git a/src/plasmacamera/videostreampolicy.h b/src/plasmacamera/videostreampolicy.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..fb91a4e8d60cdcb82f1d9b8e4fa60d049ca50fc4
+--- /dev/null
++++ b/src/plasmacamera/videostreampolicy.h
+@@ -0,0 +1,106 @@
++// SPDX-FileCopyrightText: 2026 Kostiantyn Andriiuk
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#pragma once
++
++#include <optional>
++
++class VideoStreamPolicy
++{
++public:
++    struct Size {
++        unsigned int width = 0;
++        unsigned int height = 0;
++
++        constexpr bool operator==(const Size &) const = default;
++    };
++
++    static constexpr Size previewSize()
++    {
++        return {952, 540};
++    }
++
++    /*
++     * Only enable source modes already proved stable through the complete
++     * libcamera processed path. Higher encoder sizes retain the accepted
++     * scaled-preview fallback until their source path passes independently.
++     */
++    static constexpr std::optional<Size> sourceSizeForOutput(const Size output)
++    {
++        if (output == Size{1280, 720}) {
++            return Size{1272, 720};
++        }
++
++        return std::nullopt;
++    }
++
++    std::optional<Size> beginRecording(const Size output)
++    {
++        if (phase_ != Phase::Preview) {
++            return std::nullopt;
++        }
++
++        const std::optional<Size> source = sourceSizeForOutput(output);
++        if (!source) {
++            return std::nullopt;
++        }
++
++        phase_ = Phase::PreparingRecording;
++        return source;
++    }
++
++    bool recordingStreamReady()
++    {
++        if (phase_ != Phase::PreparingRecording) {
++            return false;
++        }
++
++        phase_ = Phase::Recording;
++        return true;
++    }
++
++    std::optional<Size> beginRestore()
++    {
++        if (phase_ != Phase::Recording) {
++            return std::nullopt;
++        }
++
++        phase_ = Phase::RestoringPreview;
++        return previewSize();
++    }
++
++    bool previewStreamReady()
++    {
++        if (phase_ != Phase::RestoringPreview) {
++            return false;
++        }
++
++        phase_ = Phase::Preview;
++        return true;
++    }
++
++    void reset()
++    {
++        phase_ = Phase::Preview;
++    }
++
++    bool recording() const
++    {
++        return phase_ == Phase::Recording;
++    }
++
++    bool transitionInProgress() const
++    {
++        return phase_ == Phase::PreparingRecording || phase_ == Phase::RestoringPreview;
++    }
++
++private:
++    enum class Phase {
++        Preview,
++        PreparingRecording,
++        Recording,
++        RestoringPreview,
++    };
++
++    Phase phase_ = Phase::Preview;
++};
+diff --git a/src/plasmacamera/worker.cpp b/src/plasmacamera/worker.cpp
+index 57c26b3b8cd11e867ff1574795f3dacef958ae80..672bda1da9de1cd5a44fe898970c31e1aed8a60c 100644
+--- a/src/plasmacamera/worker.cpp
++++ b/src/plasmacamera/worker.cpp
+@@ -107,8 +107,126 @@ void Worker::unsetCamera()
+ 
+ void Worker::capture()
+ {
+-    m_stillCaptureFrames.clear();
++    if (m_state != State::Running || m_mode != CaptureMode::ViewFinder
++        || !m_stillCapturePolicy.beginCapture()) {
++        qWarning() << "Ignoring still capture while camera is not ready";
++        return;
++    }
++
++    {
++        const QMutexLocker lock(&m_stillCaptureFramesMutex);
++        m_stillCaptureFrames.clear();
++    }
++
+     setMode(CaptureMode::StillImage);
++    qInfo() << "Starting full-resolution still capture";
++
++    if (!stopStream() || !startStream(libcamera::StreamRole::StillCapture, false)) {
++        m_stillCapturePolicy.reset();
++        setMode(CaptureMode::None);
++        return;
++    }
++}
++
++void Worker::prepareVideoRecording(const QSize &outputSize)
++{
++    if (m_state != State::Running || m_mode != CaptureMode::ViewFinder) {
++        qWarning() << "Ignoring video stream preparation while camera is not ready";
++        Q_EMIT videoRecordingStreamFailed();
++        return;
++    }
++
++    const std::optional<VideoStreamPolicy::Size> requested =
++        m_videoStreamPolicy.beginRecording({
++            static_cast<unsigned int>(outputSize.width()),
++            static_cast<unsigned int>(outputSize.height()),
++        });
++    if (!requested) {
++        qWarning() << "No proved native video source for output" << outputSize;
++        Q_EMIT videoRecordingStreamFailed();
++        return;
++    }
++
++    const QSize sourceSize{
++        static_cast<int>(requested->width),
++        static_cast<int>(requested->height),
++    };
++    qInfo() << "Preparing processed video stream for output" << outputSize
++            << "with requested source" << sourceSize;
++
++    setMode(CaptureMode::None);
++    if (!stopStream() || !startStream(libcamera::StreamRole::Viewfinder, false, sourceSize)) {
++        m_videoStreamPolicy.reset();
++        Q_EMIT videoRecordingStreamFailed();
++        return;
++    }
++
++    if (!m_videoStreamPolicy.recordingStreamReady()) {
++        setError(QStringLiteral("Video stream policy rejected recording readiness"));
++        m_videoStreamPolicy.reset();
++        Q_EMIT videoRecordingStreamFailed();
++        return;
++    }
++
++    setMode(CaptureMode::Video);
++    qInfo() << "Processed video stream ready at" << m_size;
++    Q_EMIT videoRecordingStreamReady(m_size);
++}
++
++void Worker::restoreViewFinderAfterVideo()
++{
++    if (m_state != State::Running || m_mode != CaptureMode::Video) {
++        qWarning() << "Ignoring preview restore outside video mode";
++        Q_EMIT viewFinderRestoreAfterVideoFailed();
++        return;
++    }
++
++    const std::optional<VideoStreamPolicy::Size> requested = m_videoStreamPolicy.beginRestore();
++    if (!requested) {
++        qWarning() << "Video stream policy rejected preview restore";
++        Q_EMIT viewFinderRestoreAfterVideoFailed();
++        return;
++    }
++
++    const QSize previewSize{
++        static_cast<int>(requested->width),
++        static_cast<int>(requested->height),
++    };
++    qInfo() << "Restoring processed preview stream at" << previewSize
++            << "without autofocus retrigger";
++
++    setMode(CaptureMode::None);
++    if (!stopStream() || !startStream(libcamera::StreamRole::Viewfinder, false, previewSize)) {
++        m_videoStreamPolicy.reset();
++        Q_EMIT viewFinderRestoreAfterVideoFailed();
++        return;
++    }
++
++    if (!m_videoStreamPolicy.previewStreamReady()) {
++        setError(QStringLiteral("Video stream policy rejected preview readiness"));
++        m_videoStreamPolicy.reset();
++        Q_EMIT viewFinderRestoreAfterVideoFailed();
++        return;
++    }
++
++    setMode(CaptureMode::ViewFinder);
++    qInfo() << "Processed preview stream restored at" << m_size;
++    Q_EMIT viewFinderRestoredAfterVideo(m_size);
++}
++
++void Worker::triggerAutofocus()
++{
++    if (m_state != State::Running || m_mode != CaptureMode::ViewFinder) {
++        qInfo() << "Ignoring touch autofocus while viewfinder is not ready";
++        return;
++    }
++
++    if (!m_autofocus.requestTouchTrigger()) {
++        qInfo() << "Ignoring touch autofocus while unsupported or already active";
++        return;
++    }
++
++    qInfo() << "Touch autofocus armed for the next viewfinder request";
+ }
+ 
+ void Worker::setSettings(const Settings& settings)
+@@ -189,6 +307,10 @@ void Worker::requestNextFrame()
+     // Load our settings onto the camera request's controls
+     m_settings.set(request->controls());
+ 
++    if (m_autofocus.apply(request->controls()) == OneShotAutofocusPolicy::TriggerSource::Touch) {
++        qInfo() << "Queued one touch autofocus trigger";
++    }
++
+     // Queue request in camera for frame
+     m_camera->queueRequest(request);
+ }
+@@ -214,38 +336,59 @@ void Worker::requestComplete(libcamera::Request *request)
+ void Worker::processRequestDataAndEmit()
+ {
+     // Populates m_image
+-    processRequestData();
++    if (!processRequestData()) {
++        return;
++    }
+ 
+     // Implement photo capture
+     if (m_mode == CaptureMode::StillImage) {
+-        const QMutexLocker lock(&m_stillCaptureFramesMutex);
++        const StillCapturePolicy::FrameDecision decision = m_stillCapturePolicy.consumeStillFrame();
++        if (decision != StillCapturePolicy::FrameDecision::CaptureAndRestore) {
++            return;
++        }
++
++        // Copy only the accepted frame before releasing its mapped full-resolution buffer.
++        const QImage capturedFrame = m_image.copy();
++        qInfo() << "Captured full-resolution still frame at" << capturedFrame.size();
+ 
+-        if (m_stillCaptureFrames.length() >= 5) {
++        if (!stopStream()) {
++            m_stillCapturePolicy.reset();
++            setMode(CaptureMode::None);
+             return;
+         }
+ 
+-        // Add image to frames used for shot
+-        m_stillCaptureFrames.enqueue(m_image.copy());
++        qInfo() << "Restoring 952x540 viewfinder without autofocus retrigger";
++        if (!startStream(libcamera::StreamRole::Viewfinder, false)) {
++            m_stillCapturePolicy.reset();
++            setMode(CaptureMode::None);
++            return;
++        }
++
++        m_stillCapturePolicy.viewfinderRestored();
++        setMode(CaptureMode::ViewFinder);
+ 
+-        // Once we reach 5 frames, emit the photo
+-        if (m_stillCaptureFrames.length() == 5) {
+-            setMode(CaptureMode::ViewFinder);
+-            Q_EMIT stillCaptureFrames(m_stillCaptureFrames);
++        {
++            const QMutexLocker lock(&m_stillCaptureFramesMutex);
++            m_stillCaptureFrames.clear();
++            m_stillCaptureFrames.enqueue(capturedFrame);
+         }
++
++        Q_EMIT stillCaptureFrames(m_stillCaptureFrames);
++        return;
+     }
+ 
+     // Emit view finder frame, m_image is moved for performance
+     Q_EMIT viewFinderFrame(std::move(m_image));
+ }
+ 
+-void Worker::processRequestData()
++bool Worker::processRequestData()
+ {
+     libcamera::Request *request;
+     {
+         // Obtain a finished request from the queue
+         const QMutexLocker lock(&m_doneMutex);
+         if (m_doneQueue.isEmpty()) {
+-            return;
++            return false;
+         }
+         request = m_doneQueue.dequeue();
+     }
+@@ -253,7 +396,7 @@ void Worker::processRequestData()
+     logAutofocusState(request->metadata());
+ 
+     if (!request->buffers().count(m_stream)) {
+-        return;
++        return false;
+     }
+ 
+     libcamera::FrameBuffer *buffer = request->buffers().at(m_stream);
+@@ -272,12 +415,19 @@ void Worker::processRequestData()
+         const QMutexLocker lock(&m_freeMutex);
+         m_freeQueue.enqueue(request);
+     }
++
++    return true;
+ }
+ 
+ void Worker::logAutofocusState(const libcamera::ControlList &metadata)
+ {
+     const std::optional<int32_t> state = metadata.get(libcamera::controls::AfState);
+-    if (!state || state == m_lastAutofocusState) {
++    if (!state) {
++        return;
++    }
++
++    m_autofocus.observeState(*state);
++    if (state == m_lastAutofocusState) {
+         return;
+     }
+ 
+@@ -285,31 +435,34 @@ void Worker::logAutofocusState(const libcamera::ControlList &metadata)
+     qInfo() << "Autofocus state:" << autofocusStateName(*state) << "(" << *state << ")";
+ }
+ 
+-void Worker::startViewFinder()
++bool Worker::startViewFinder()
+ {
+     if (!m_camera) {
+-        return;
++        return false;
+     }
+ 
+     qDebug() << "Starting view finder in worker";
+ 
+     const std::optional<int> location = m_camera->properties().get(libcamera::properties::Location);
+     const bool rearCamera = location && *location == libcamera::properties::CameraLocationBack;
+-    m_startupAutofocus.beginSession(rearCamera, m_camera->controls());
++    m_autofocus.beginSession(rearCamera, m_camera->controls());
+     m_lastAutofocusState.reset();
+-    qInfo() << "Startup autofocus:" << (m_startupAutofocus.supported() ? "available" : "disabled")
++    qInfo() << "Startup autofocus:" << (m_autofocus.supported() ? "available" : "disabled")
+             << "rear camera:" << rearCamera;
+ 
+-    /*
+-     * https://libcamera.org/api-html/namespacelibcamera.html#a295d1f5e7828d95c0b0aabc0a8baac03
+-     * The StillCapture and Viewfinder roles both generate a config that uses the same resolution
+-     * while the documentation states that the image will be captured in higher quality I prefer
+-     * the Viewfinder config because it appears that the higher resource usage of StillCapture
+-     * makes app more unstable (it could also be related to the demands of restarting the camera)
+-     */
+-    m_config = m_camera->generateConfiguration({libcamera::StreamRole::Viewfinder});
++    return startStream(libcamera::StreamRole::Viewfinder, true);
++}
++
++bool Worker::startStream(const libcamera::StreamRole role, const bool applyStartupAutofocus, const QSize &requestedSize)
++{
++    if (!m_camera) {
++        return false;
++    }
+ 
+-    configure();
++    m_config = m_camera->generateConfiguration({role});
++    if (!configure(role, requestedSize)) {
++        return false;
++    }
+ 
+     // Connect signal for when a frame request is complete
+     m_camera->requestCompleted.connect(this, &Worker::requestComplete);
+@@ -317,37 +470,40 @@ void Worker::startViewFinder()
+     // Start camera
+     if (int ret = m_camera->start(); ret < 0) {
+         setError(ret);
+-        return;
++        return false;
+     }
+ 
+     // Add all requests
+     for (std::unique_ptr<libcamera::Request> &request : m_requests) {
+-        if (m_startupAutofocus.apply(request->controls())) {
++        const OneShotAutofocusPolicy::TriggerSource triggerSource = applyStartupAutofocus
++            ? m_autofocus.apply(request->controls())
++            : OneShotAutofocusPolicy::TriggerSource::None;
++        if (triggerSource == OneShotAutofocusPolicy::TriggerSource::Startup) {
+             qInfo() << "Queued one startup autofocus trigger";
+         }
+         if (int ret = m_camera->queueRequest(request.get()); ret < 0) {
+             setError(ret);
+-            return;
++            return false;
+         }
+     }
+ 
+     // Start polling for frames
+     m_framePollTimer->start();
++    return true;
+ }
+ 
+-void Worker::stopViewFinder()
++bool Worker::stopStream()
+ {
+-    qDebug() << "stop view finder";
++    qDebug() << "Stopping camera stream";
+     m_framePollTimer->stop();
+-    m_startupAutofocus.endSession();
+-    m_lastAutofocusState.reset();
++    m_autofocus.cancelCycle();
+ 
+     if (m_camera) {
+         // All pending requests are cancelled
+         int ret = m_camera->stop();
+         if (ret < 0) {
+             setError(ret);
+-            return;
++            return false;
+         }
+ 
+         // Cleanup signals
+@@ -362,8 +518,10 @@ void Worker::stopViewFinder()
+     if (m_allocator) {
+         m_allocator->free(m_stream);
+         delete m_allocator;
++        m_allocator = nullptr;
+     }
+ 
++    m_image = QImage();
+     m_mappedBuffers.clear();
+ 
+     {
+@@ -381,6 +539,21 @@ void Worker::stopViewFinder()
+         m_doneQueue.clear();
+     }
+ 
++    m_stream = nullptr;
++    return true;
++}
++
++void Worker::stopViewFinder()
++{
++    qDebug() << "Stopping view finder in worker";
++    if (!stopStream()) {
++        return;
++    }
++    m_autofocus.endSession();
++    m_lastAutofocusState.reset();
++    m_stillCapturePolicy.reset();
++    m_videoStreamPolicy.reset();
++
+     if (m_camera) {
+         int ret = m_camera->release();
+         if (ret < 0) {
+@@ -461,6 +634,8 @@ void Worker::setMode(CaptureMode mode)
+             break;
+         case CaptureMode::StillImage:
+             break;
++        case CaptureMode::Video:
++            break;
+         default:
+             qWarning() << "Transition from state other than None or StillImage to ViewFinder";
+             break;
+@@ -481,10 +656,10 @@ void Worker::setMode(CaptureMode mode)
+     }
+ }
+ 
+-void Worker::configure()
++bool Worker::configure(const libcamera::StreamRole role, const QSize &requestedSize)
+ {
+     if (!m_config || !m_camera) {
+-        return;
++        return false;
+     }
+ 
+     // Add stream configuration
+@@ -508,19 +683,42 @@ void Worker::configure()
+         }
+     }
+ 
++    if (role == libcamera::StreamRole::Viewfinder && requestedSize.isValid()) {
++        streamConfig.size = {
++            static_cast<unsigned int>(requestedSize.width()),
++            static_cast<unsigned int>(requestedSize.height()),
++        };
++        qInfo() << "Requesting explicit processed viewfinder size" << requestedSize;
++    } else {
++        /*
++         * Plasma presentation pushes the 720p Simple Software ISP path slightly
++         * beyond its frame budget on this mobile GPU. Keep enough processing
++         * margin for a stable live path; still capture can reconfigure separately.
++         */
++        const VideoStreamPolicy::Size preview = VideoStreamPolicy::previewSize();
++        const libcamera::Size maximumViewfinderSize{preview.width, preview.height};
++        if (role == libcamera::StreamRole::Viewfinder
++            && streamConfig.size.width > maximumViewfinderSize.width
++            && streamConfig.size.height > maximumViewfinderSize.height) {
++            qInfo() << "Capping viewfinder size at 952x540";
++            streamConfig.size = maximumViewfinderSize;
++        }
++    }
++
+     // TODO: allow user to override config
+     //  - https://git.libcamera.org/libcamera/libcamera.git/tree/src/apps/qcam/main_window.cpp#n399
+ 
+-    qDebug() << "Viewfinder configuration is: " << streamConfig.toString();
++    qInfo() << (role == libcamera::StreamRole::Viewfinder ? "Viewfinder configuration:" : "Full-resolution still configuration:")
++            << streamConfig.toString();
+ 
+     // Validate config
+     const libcamera::CameraConfiguration::Status validation = m_config->validate();
+     if (validation == libcamera::CameraConfiguration::Adjusted) {
+-        qInfo() << "Adjusted viewfinder configuration is: " << streamConfig.toString();
++        qInfo() << "Adjusted camera configuration:" << streamConfig.toString();
+     }
+     if (validation == libcamera::CameraConfiguration::Invalid) {
+         qWarning() << QString::fromStdString("Failed to validate camera configuration");
+-        return;
++        return false;
+     }
+ 
+     // TODO: it might actually be possible to quick switch the config of the camera
+@@ -529,7 +727,7 @@ void Worker::configure()
+     int ret = m_camera->configure(m_config.get());
+     if (ret < 0) {
+         setError(ret);
+-        return;
++        return false;
+     }
+ 
+     m_stream = m_config->at(0).stream();
+@@ -540,14 +738,16 @@ void Worker::configure()
+                     streamConfig.stride);
+     if (ret < 0) {
+         setError(ret);
+-        return;
++        return false;
+     }
+ 
+     ret = createRequests();
+     if (ret < 0) {
+         setError(ret);
+-        return;
++        return false;
+     }
++
++    return true;
+ }
+ 
+ const QList<libcamera::PixelFormat>& Worker::getNativeFormats()
+diff --git a/src/plasmacamera/worker.h b/src/plasmacamera/worker.h
+index 0113dd7494c4f612cee92cd4b8b73b3b90d265ee..9853ea4eea5cf8855fde75344e8207fb35b03ac6 100644
+--- a/src/plasmacamera/worker.h
++++ b/src/plasmacamera/worker.h
+@@ -21,6 +21,8 @@
+ #include "converter.h"
+ #include "image.h"
+ #include "settings.h"
++#include "stillcapturepolicy.h"
++#include "videostreampolicy.h"
+ 
+ // needed to pass shared_ptr via signals
+ Q_DECLARE_METATYPE(const std::shared_ptr<libcamera::Camera>)
+@@ -53,6 +55,10 @@ Q_SIGNALS:
+     //		- it looks like slots with queued connection might work really nicely?
+     void viewFinderFrame(const QImage &frame); // connect to this to get new frames
+     void stillCaptureFrames(const QQueue<QImage> &frames); // connect to this to get captures
++    void videoRecordingStreamReady(const QSize &actualSize);
++    void videoRecordingStreamFailed();
++    void viewFinderRestoredAfterVideo(const QSize &actualSize);
++    void viewFinderRestoreAfterVideoFailed();
+ 
+ public Q_SLOTS:
+     // Camera
+@@ -71,6 +77,13 @@ public Q_SLOTS:
+     // Photo capture
+     void capture();
+ 
++    // Reconfigure the single processed stream for and after video recording.
++    void prepareVideoRecording(const QSize &outputSize);
++    void restoreViewFinderAfterVideo();
++
++    // Queue one bounded autofocus scan on the next viewfinder request.
++    void triggerAutofocus();
++
+     void setSettings(const Settings &settings);
+ 
+ private Q_SLOTS:
+@@ -100,13 +113,15 @@ private:
+         Video,
+     };
+ 
+-    void startViewFinder();
++    bool startViewFinder();
+     void stopViewFinder();
++    bool startStream(libcamera::StreamRole role, bool applyStartupAutofocus, const QSize &requestedSize = QSize());
++    bool stopStream();
+ 
+     void setState(State state);
+     void setMode(CaptureMode mode);
+ 
+-    void configure();
++    bool configure(libcamera::StreamRole role, const QSize &requestedSize);
+ 
+     static const QList<libcamera::PixelFormat> &getNativeFormats();
+     int setFormat(const QSize &size, const libcamera::PixelFormat &format, const libcamera::ColorSpace &colorSpace, unsigned int stride);
+@@ -122,7 +137,7 @@ private:
+     int createRequests();
+ 
+     void requestComplete(libcamera::Request *request);
+-    void processRequestData(); // convert buffers to QImage stored at m_image
++    bool processRequestData(); // convert buffers to QImage stored at m_image
+     void logAutofocusState(const libcamera::ControlList &metadata);
+ 
+     bool m_error = false;
+@@ -163,8 +178,10 @@ private:
+     QMutex m_doneMutex;
+     QMutex m_freeMutex;
+ 
+-    StartupAutofocusPolicy m_startupAutofocus;
++    OneShotAutofocusPolicy m_autofocus;
+     std::optional<int32_t> m_lastAutofocusState;
++    StillCapturePolicy m_stillCapturePolicy;
++    VideoStreamPolicy m_videoStreamPolicy;
+ 
+     Settings m_settings;
+ };
+diff --git a/src/plasmacameramanager.cpp b/src/plasmacameramanager.cpp
+index 7aac316a0b23a7915f74ea14025ae8a07e840609..7c9e28259258589b65e6110a24d74852dbef4581 100644
+--- a/src/plasmacameramanager.cpp
++++ b/src/plasmacameramanager.cpp
+@@ -27,7 +27,7 @@ PlasmaCameraManager::PlasmaCameraManager(QObject *parent)
+ 
+     // m_session links m_videoInput and m_audioInput to m_recorder
+     m_session.setVideoFrameInput(&m_videoInput);
+-    connect(&m_videoFrameTimer, &QTimer::timeout, this, &PlasmaCameraManager::processVideoFrame);
++    connect(&m_videoInput, &QVideoFrameInput::readyToSendVideoFrame, this, &PlasmaCameraManager::processVideoFrame);
+     connect(&m_orientationSensor, &QOrientationSensor::readingChanged, this, &PlasmaCameraManager::updateFromOrientationSensor);
+ 
+     m_orientationSensor.start();
+@@ -151,10 +151,11 @@ void PlasmaCameraManager::setAudioRecordingEnabledInternal(bool enabled)
+ 
+ bool PlasmaCameraManager::isRecordingVideo() const
+ {
+-    if (!m_recorder) {
++    if (!m_recorder || m_isSavingVideo) {
+         return false;
+     }
+-    return m_recorder->recorderState() == QMediaRecorder::RecordingState && !m_isSavingVideo;
++    return m_videoStreamPreparationPending
++        || m_recorder->recorderState() == QMediaRecorder::RecordingState;
+ }
+ 
+ bool PlasmaCameraManager::isSavingVideo() const
+@@ -164,18 +165,37 @@ bool PlasmaCameraManager::isSavingVideo() const
+ 
+ void PlasmaCameraManager::startRecordingVideo()
+ {
+-    if (!m_recorder) {
++    if (!m_recorder || isRecordingVideo() || m_isSavingVideo) {
+         return;
+     }
+ 
+     m_droppedFrames = false; // reset
+ 
++    const QSize sourceSize = nativeVideoSourceSize();
++    if (sourceSize.isValid() && m_plasmaCamera
++        && m_plasmaCamera->prepareVideoRecording(sourceSize)) {
++        m_videoStreamPreparationPending = true;
++        qInfo() << "Waiting for native processed video stream" << sourceSize;
++        Q_EMIT isRecordingVideoChanged();
++        return;
++    }
++
++    startRecorderNow();
++}
++
++void PlasmaCameraManager::startRecorderNow()
++{
++    if (!m_recorder) {
++        return;
++    }
++
+     // Set the correct rotation metadata prior to recording
+     QMediaMetaData metaData;
+     metaData.insert(QMediaMetaData::Orientation, outputOrientationDegrees());
+     metaData.insert(QMediaMetaData::Date, QDateTime::currentDateTime());
+     m_recorder->setMetaData(metaData);
+ 
++    qInfo() << "Starting recorder with source frame" << m_currentFrame.size();
+     m_recorder->record();
+ }
+ 
+@@ -186,8 +206,6 @@ void PlasmaCameraManager::stopRecordingVideo()
+     }
+     m_recorder->stop();
+     setIsSavingVideo(true);
+-
+-    m_videoFrameTimer.stop();
+ }
+ 
+ int PlasmaCameraManager::captureImage()
+@@ -256,6 +274,10 @@ void PlasmaCameraManager::setPlasmaCamera(PlasmaCamera *plasmaCamera)
+     if (plasmaCamera != m_plasmaCamera) {
+         if (m_plasmaCamera) {
+             disconnect(plasmaCamera, &PlasmaCamera::availableChanged, this, &PlasmaCameraManager::setReadyForCapture);
++            disconnect(m_plasmaCamera, &PlasmaCamera::videoRecordingStreamReady, this, &PlasmaCameraManager::handleVideoRecordingStreamReady);
++            disconnect(m_plasmaCamera, &PlasmaCamera::videoRecordingStreamFailed, this, &PlasmaCameraManager::handleVideoRecordingStreamFailed);
++            disconnect(m_plasmaCamera, &PlasmaCamera::viewFinderRestoredAfterVideo, this, &PlasmaCameraManager::handleViewFinderRestoredAfterVideo);
++            disconnect(m_plasmaCamera, &PlasmaCamera::viewFinderRestoreAfterVideoFailed, this, &PlasmaCameraManager::handleViewFinderRestoreAfterVideoFailed);
+             disconnect(plasmaCamera, &PlasmaCamera::settingsChanged, this, &PlasmaCameraManager::setSettings);
+             disconnect(plasmaCamera, &PlasmaCamera::viewFinderFrame, this, &PlasmaCameraManager::processViewfinderFrame);
+             disconnect(plasmaCamera, &PlasmaCamera::stillCaptureFrames, this, &PlasmaCameraManager::processCaptureImage);
+@@ -267,6 +289,10 @@ void PlasmaCameraManager::setPlasmaCamera(PlasmaCamera *plasmaCamera)
+             connect(plasmaCamera, &PlasmaCamera::availableChanged, this, &PlasmaCameraManager::setReadyForCapture);
+             connect(plasmaCamera, &PlasmaCamera::settingsChanged, this, &PlasmaCameraManager::setSettings);
+             connect(plasmaCamera, &PlasmaCamera::viewFinderFrame, this, &PlasmaCameraManager::processViewfinderFrame);
++            connect(plasmaCamera, &PlasmaCamera::videoRecordingStreamReady, this, &PlasmaCameraManager::handleVideoRecordingStreamReady);
++            connect(plasmaCamera, &PlasmaCamera::videoRecordingStreamFailed, this, &PlasmaCameraManager::handleVideoRecordingStreamFailed);
++            connect(plasmaCamera, &PlasmaCamera::viewFinderRestoredAfterVideo, this, &PlasmaCameraManager::handleViewFinderRestoredAfterVideo);
++            connect(plasmaCamera, &PlasmaCamera::viewFinderRestoreAfterVideoFailed, this, &PlasmaCameraManager::handleViewFinderRestoreAfterVideoFailed);
+             connect(plasmaCamera, &PlasmaCamera::stillCaptureFrames, this, &PlasmaCameraManager::processCaptureImage);
+         }
+ 
+@@ -291,17 +317,24 @@ void PlasmaCameraManager::setRecorder(QMediaRecorder *recorder)
+     m_recorder = recorder;
+     updateRecorderSettings();
+ 
+-    connect(recorder, &QMediaRecorder::errorOccurred, [this](QMediaRecorder::Error error, const QString &errorString) {
++    connect(recorder, &QMediaRecorder::errorOccurred, this, [this](QMediaRecorder::Error error, const QString &errorString) {
+         qDebug() << "Recording error:" << error << errorString;
+         setError(0, Error::ResourceError, errorString);
++        restoreNativeVideoStream();
+     });
+ 
+     m_session.setRecorder(recorder);
+     connect(m_recorder, &QMediaRecorder::recorderStateChanged, this, [this]() {
+         if (m_recorder->recorderState() == QMediaRecorder::RecordingState) {
+-            m_videoFrameTimer.start();
++            m_videoFrameSequence = 0;
++            m_videoRecordingClock.start();
++            m_videoFrameSubmissionPolicy.startSession(m_videoRecordingFps);
+         } else {
+-            m_videoFrameTimer.stop();
++            m_videoFrameSubmissionPolicy.stopSession();
++            m_videoRecordingClock.invalidate();
++        }
++        if (m_recorder->recorderState() == QMediaRecorder::StoppedState) {
++            restoreNativeVideoStream();
+         }
+ 
+         // Once the recorder changes to any state, it no longer is saving video
+@@ -389,8 +422,88 @@ void PlasmaCameraManager::updateRecorderSettings()
+     // m_recorder->setVideoFrameRate(m_videoRecordingFps);
+     m_recorder->setVideoFrameRate(0);
+ 
+-    // Set frame timer polling rate
+-    m_videoFrameTimer.setInterval(static_cast<int>(1000.0f / m_videoRecordingFps));
++}
++
++QSize PlasmaCameraManager::nativeVideoSourceSize() const
++{
++    // First-stage hardware candidate: processed 720p already passed outside
++    // Plasma. Keep every unproved source size on the accepted scaled fallback.
++    if (m_videoResolution == Resolution720p) {
++        return QSize(1280, 720);
++    }
++
++    return QSize();
++}
++
++void PlasmaCameraManager::handleVideoRecordingStreamReady(const QSize &actualSize)
++{
++    if (!m_videoStreamPreparationPending) {
++        qWarning() << "Received an unexpected video stream readiness signal";
++        return;
++    }
++
++    m_videoStreamPreparationPending = false;
++    m_nativeVideoStreamActive = true;
++    qInfo() << "Native processed video source is ready at" << actualSize;
++    startRecorderNow();
++}
++
++void PlasmaCameraManager::handleVideoRecordingStreamFailed()
++{
++    if (!m_videoStreamPreparationPending) {
++        return;
++    }
++
++    m_videoStreamPreparationPending = false;
++    Q_EMIT isRecordingVideoChanged();
++    setError(
++        0,
++        Error::ResourceError,
++        QStringLiteral("Could not prepare the selected native video source"));
++}
++
++void PlasmaCameraManager::restoreNativeVideoStream()
++{
++    if (!m_nativeVideoStreamActive || m_videoStreamRestorePending || !m_plasmaCamera) {
++        return;
++    }
++
++    if (!m_plasmaCamera->restoreViewFinderAfterVideo()) {
++        m_nativeVideoStreamActive = false;
++        setError(
++            0,
++            Error::ResourceError,
++            QStringLiteral("Could not request preview restore after video"));
++        return;
++    }
++
++    m_videoStreamRestorePending = true;
++}
++
++void PlasmaCameraManager::handleViewFinderRestoredAfterVideo(const QSize &actualSize)
++{
++    if (!m_videoStreamRestorePending) {
++        qWarning() << "Received an unexpected preview restore signal";
++        return;
++    }
++
++    m_videoStreamRestorePending = false;
++    m_nativeVideoStreamActive = false;
++    qInfo() << "Accepted processed preview restored at" << actualSize;
++}
++
++void PlasmaCameraManager::handleViewFinderRestoreAfterVideoFailed()
++{
++    if (!m_videoStreamRestorePending) {
++        return;
++    }
++
++    m_videoStreamRestorePending = false;
++    m_nativeVideoStreamActive = false;
++    setError(
++        0,
++        Error::ResourceError,
++        QStringLiteral("Could not restore preview after native video recording"));
+ }
+ 
+ void PlasmaCameraManager::setAudioInput(QAudioInput *audioInput)
+@@ -530,11 +643,23 @@ void PlasmaCameraManager::processViewfinderFrame(const QImage &image)
+     frame.setMirrored(m_plasmaCamera->mirrorOutput());
+ 
+     // Add to sink
+-    m_videoSink->setVideoFrame(frame);
++    if (m_videoFrameSubmissionPolicy.shouldPresentPreview()) {
++        m_videoSink->setVideoFrame(frame);
++    }
+ 
+-    // Set as video frame for video recording
+-    m_videoFrame = std::move(frame);
+-    m_frameRecorded = false;
++    if (isRecordingVideo() && m_videoRecordingClock.isValid()) {
++        // The viewfinder QImage can refer directly to a libcamera buffer that
++        // is reused after this signal. Give the encoder its own pixels so an
++        // already queued frame cannot change underneath it.
++        m_videoFrame = QVideoFrame(image.copy());
++        m_videoFrame.setRotation(frame.rotation());
++        m_videoFrame.setMirrored(frame.mirrored());
++
++        m_videoFrameSubmissionPolicy.offerFrame(
++            ++m_videoFrameSequence,
++            m_videoRecordingClock.nsecsElapsed() / 1000);
++        processVideoFrame();
++    }
+ }
+ 
+ void PlasmaCameraManager::processCaptureImage(const QQueue<QImage> &frames)
+@@ -625,24 +750,30 @@ void PlasmaCameraManager::writeExifData(const QString &fileName)
+ 
+ void PlasmaCameraManager::processVideoFrame()
+ {
+-    // Set the time in the video that the frame should show up.
+-    // This allows for frames to be dropped without impacting video speed.
+-    // TODO: This causes severe frame corruption on devices that drop frames, how do we make it smoother?
+-    int frameLengthMicroseconds = qRound(1000.0 * 1000.0 / m_videoRecordingFps);
+-    m_videoFrame.setStartTime(m_frameRecordingCount * frameLengthMicroseconds);
+-    m_videoFrame.setEndTime((m_frameRecordingCount + 1) * frameLengthMicroseconds - 1);
++    const std::optional<VideoFrameSubmissionPolicy::PendingFrame> pending =
++        m_videoFrameSubmissionPolicy.pendingFrame();
++    if (!pending || !m_videoFrame.isValid()) {
++        return;
++    }
++
++    // Preserve real camera delivery cadence. A frame that could not be queued
++    // remains pending until QVideoFrameInput reports readiness, while a newer
++    // camera frame replaces it. The same source-frame sequence is never sent
++    // successfully twice.
++    m_videoFrame.setStartTime(pending->startTimeUs);
++    m_videoFrame.setEndTime(pending->endTimeUs);
++    m_videoFrame.setStreamFrameRate(m_videoRecordingFps);
+ 
+     // Attempt to send frame
+     bool success = m_videoInput.sendVideoFrame(m_videoFrame);
+     if (success) {
+-        m_frameRecorded = true;
++        m_videoFrameSubmissionPolicy.frameSubmitted();
+     } else {
+         if (!m_droppedFrames) {
+             Q_EMIT framesDropped();
+             m_droppedFrames = true;
+         }
+     }
+-    m_frameRecordingCount++;
+ }
+ 
+ void PlasmaCameraManager::updateFromOrientationSensor()
+diff --git a/src/plasmacameramanager.h b/src/plasmacameramanager.h
+index 2c2754173db1cff86a76eb26764d84889f1ac690..cb3c062679935e0705d0713e67bb0803287ed757 100644
+--- a/src/plasmacameramanager.h
++++ b/src/plasmacameramanager.h
+@@ -5,6 +5,7 @@
+ #pragma once
+ 
+ #include <KAboutData>
++#include <QElapsedTimer>
+ #include <QOrientationSensor>
+ #include <QQmlEngine>
+ #include <QtMultimedia>
+@@ -13,6 +14,7 @@
+ #include <libcamera/camera_manager.h>
+ 
+ #include "plasmacamera.h"
++#include "plasmacamera/videoframesubmissionpolicy.h"
+ 
+ /*!
+  * \brief Manages the libcamera camera controller (similar to QMediaCaptureSession)
+@@ -215,6 +217,10 @@ private Q_SLOTS:
+     void processCaptureImage(const QQueue<QImage> &frames);
+     void processVideoFrame();
+     void updateFromOrientationSensor();
++    void handleVideoRecordingStreamReady(const QSize &actualSize);
++    void handleVideoRecordingStreamFailed();
++    void handleViewFinderRestoredAfterVideo(const QSize &actualSize);
++    void handleViewFinderRestoreAfterVideoFailed();
+ 
+     void setIsSavingVideo(bool isSavingVideo);
+ 
+@@ -233,6 +239,9 @@ private:
+     void writeExifData(const QString &fileName);
+ 
+     void setAudioRecordingEnabledInternal(bool enabled);
++    void startRecorderNow();
++    void restoreNativeVideoStream();
++    QSize nativeVideoSourceSize() const;
+ 
+     int captureImageInternal();
+ 
+@@ -262,11 +271,11 @@ private:
+     QImage m_currentFrame;
+     QVideoFrame m_videoFrame;
+     QVideoSink *m_videoSink = nullptr;
+-    int m_frameRecordingCount = 0;
+-    bool m_frameRecorded = false;
++    QElapsedTimer m_videoRecordingClock;
++    std::uint64_t m_videoFrameSequence = 0;
++    VideoFrameSubmissionPolicy m_videoFrameSubmissionPolicy;
+ 
+     QMediaCaptureSession m_session;
+-    QTimer m_videoFrameTimer;
+     QMediaFormat m_format;
+     QVideoFrameInput m_videoInput;
+     QMediaRecorder *m_recorder = nullptr;
+@@ -288,4 +297,7 @@ private:
+ 
+     bool m_isSavingVideo = false;
+     bool m_droppedFrames = false;
++    bool m_videoStreamPreparationPending = false;
++    bool m_nativeVideoStreamActive = false;
++    bool m_videoStreamRestorePending = false;
+ };
+diff --git a/src/tests/autofocuspolicytest.cpp b/src/tests/autofocuspolicytest.cpp
+index 74f39e26afc2a6bfce1320992977f5eb9a6e654c..a99d8c336c9cd97ddc750c80a3d7b51814b8da6a 100644
+--- a/src/tests/autofocuspolicytest.cpp
++++ b/src/tests/autofocuspolicytest.cpp
+@@ -46,7 +46,7 @@ bool hasStartupControls(const libcamera::ControlList &requestControls)
+ 
+ bool testOneShot()
+ {
+-    StartupAutofocusPolicy policy;
++    OneShotAutofocusPolicy policy;
+     const libcamera::ControlInfoMap available = controls(
+         true, libcamera::controls::AfModeAuto,
+         true, libcamera::controls::AfTriggerStart);
+@@ -58,20 +58,30 @@ bool testOneShot()
+     }
+ 
+     libcamera::ControlList first(libcamera::controls::controls);
+-    if (!policy.apply(first) || !hasStartupControls(first) || policy.pending()) {
++    if (policy.apply(first) != OneShotAutofocusPolicy::TriggerSource::Startup
++        || !hasStartupControls(first) || policy.pending() || !policy.inProgress()) {
+         std::cerr << "First request did not consume the startup trigger\n";
+         return false;
+     }
+ 
+     libcamera::ControlList second(libcamera::controls::controls);
+-    if (policy.apply(second) || !second.empty()) {
++    if (policy.apply(second) != OneShotAutofocusPolicy::TriggerSource::None
++        || !second.empty()) {
+         std::cerr << "Startup trigger was repeated\n";
+         return false;
+     }
+ 
++    policy.observeState(libcamera::controls::AfStateScanning);
++    policy.observeState(libcamera::controls::AfStateFocused);
++    if (policy.inProgress()) {
++        std::cerr << "Completed startup scan stayed active\n";
++        return false;
++    }
++
+     policy.beginSession(true, available);
+     libcamera::ControlList nextSession(libcamera::controls::controls);
+-    if (!policy.apply(nextSession) || !hasStartupControls(nextSession)) {
++    if (policy.apply(nextSession) != OneShotAutofocusPolicy::TriggerSource::Startup
++        || !hasStartupControls(nextSession)) {
+         std::cerr << "A new rear session was not re-armed\n";
+         return false;
+     }
+@@ -95,7 +105,7 @@ bool testCapabilityGates()
+         true, libcamera::controls::AfModeAuto,
+         true, libcamera::controls::AfTriggerCancel);
+ 
+-    StartupAutofocusPolicy policy;
++    OneShotAutofocusPolicy policy;
+     for (const auto &[rear, info] : {
+              std::pair{ false, &available },
+              std::pair{ true, &noMode },
+@@ -105,7 +115,8 @@ bool testCapabilityGates()
+          }) {
+         policy.beginSession(rear, *info);
+         libcamera::ControlList request(libcamera::controls::controls);
+-        if (policy.supported() || policy.pending() || policy.apply(request)
++        if (policy.supported() || policy.pending() || policy.requestTouchTrigger()
++            || policy.apply(request) != OneShotAutofocusPolicy::TriggerSource::None
+             || !request.empty()) {
+             std::cerr << "Unsupported/front session was armed\n";
+             return false;
+@@ -115,7 +126,7 @@ bool testCapabilityGates()
+     policy.beginSession(true, available);
+     policy.beginSession(false, available);
+     libcamera::ControlList switched(libcamera::controls::controls);
+-    if (policy.apply(switched)) {
++    if (policy.apply(switched) != OneShotAutofocusPolicy::TriggerSource::None) {
+         std::cerr << "Rear pending trigger leaked into a front session\n";
+         return false;
+     }
+@@ -123,7 +134,8 @@ bool testCapabilityGates()
+     policy.beginSession(true, available);
+     policy.endSession();
+     libcamera::ControlList stopped(libcamera::controls::controls);
+-    if (policy.supported() || policy.pending() || policy.apply(stopped)) {
++    if (policy.supported() || policy.pending() || policy.inProgress()
++        || policy.apply(stopped) != OneShotAutofocusPolicy::TriggerSource::None) {
+         std::cerr << "Stopped session retained a pending trigger\n";
+         return false;
+     }
+@@ -131,11 +143,89 @@ bool testCapabilityGates()
+     return true;
+ }
+ 
++bool testTouchRetriggerLifecycle()
++{
++    OneShotAutofocusPolicy policy;
++    const libcamera::ControlInfoMap available = controls(
++        true, libcamera::controls::AfModeAuto,
++        true, libcamera::controls::AfTriggerStart);
++
++    policy.beginSession(true, available);
++    if (policy.requestTouchTrigger()) {
++        std::cerr << "Touch trigger replaced the pending startup trigger\n";
++        return false;
++    }
++
++    libcamera::ControlList startup(libcamera::controls::controls);
++    if (policy.apply(startup) != OneShotAutofocusPolicy::TriggerSource::Startup) {
++        std::cerr << "Startup trigger was not applied before touch test\n";
++        return false;
++    }
++
++    if (policy.requestTouchTrigger()) {
++        std::cerr << "Touch trigger interrupted the startup scan\n";
++        return false;
++    }
++
++    // A stale terminal result from the previous request must not complete a
++    // newly queued cycle until that cycle has visibly entered Scanning.
++    policy.observeState(libcamera::controls::AfStateFocused);
++    if (!policy.inProgress()) {
++        std::cerr << "Stale focus metadata completed the active scan\n";
++        return false;
++    }
++
++    policy.observeState(libcamera::controls::AfStateScanning);
++    policy.observeState(libcamera::controls::AfStateFocused);
++    if (policy.inProgress() || !policy.requestTouchTrigger()
++        || !policy.pending() || policy.requestTouchTrigger()) {
++        std::cerr << "First touch trigger was not coalesced correctly\n";
++        return false;
++    }
++
++    libcamera::ControlList touch(libcamera::controls::controls);
++    if (policy.apply(touch) != OneShotAutofocusPolicy::TriggerSource::Touch
++        || !hasStartupControls(touch) || !policy.inProgress()) {
++        std::cerr << "Touch trigger was not applied to the next request\n";
++        return false;
++    }
++
++    if (policy.requestTouchTrigger()) {
++        std::cerr << "Rapid touch restarted an active focus scan\n";
++        return false;
++    }
++
++    policy.observeState(libcamera::controls::AfStateScanning);
++    policy.observeState(libcamera::controls::AfStateFailed);
++    if (policy.inProgress() || !policy.requestTouchTrigger()) {
++        std::cerr << "Failed scan did not permit a later deliberate retry\n";
++        return false;
++    }
++
++    policy.cancelCycle();
++    libcamera::ControlList cancelled(libcamera::controls::controls);
++    if (policy.pending() || policy.inProgress()
++        || policy.apply(cancelled) != OneShotAutofocusPolicy::TriggerSource::None
++        || !cancelled.empty()) {
++        std::cerr << "Stream transition retained a touch trigger\n";
++        return false;
++    }
++
++    policy.endSession();
++    if (policy.requestTouchTrigger()) {
++        std::cerr << "Stopped session accepted a touch trigger\n";
++        return false;
++    }
++
++    return true;
++}
++
+ }
+ 
+ int main()
+ {
+-    if (!testOneShot() || !testCapabilityGates()) {
++    if (!testOneShot() || !testCapabilityGates()
++        || !testTouchRetriggerLifecycle()) {
+         return 1;
+     }
+ 
+diff --git a/src/tests/stillcapturepolicytest.cpp b/src/tests/stillcapturepolicytest.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..6094fbb3a2550db9dccb0ec3ec3d43012ab96c2b
+--- /dev/null
++++ b/src/tests/stillcapturepolicytest.cpp
+@@ -0,0 +1,70 @@
++// SPDX-FileCopyrightText: 2026 Kostiantyn Andriiuk
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#include <iostream>
++
++#include "src/plasmacamera/stillcapturepolicy.h"
++
++namespace
++{
++
++bool testPreviewLimit()
++{
++    if (StillCapturePolicy::maximumViewfinderWidth() != 952
++        || StillCapturePolicy::maximumViewfinderHeight() != 540) {
++        std::cerr << "Unexpected viewfinder limit\n";
++        return false;
++    }
++
++    return true;
++}
++
++bool testSingleCaptureCycle()
++{
++    StillCapturePolicy policy;
++    if (policy.captureInProgress() || !policy.beginCapture() || policy.beginCapture()) {
++        std::cerr << "Capture cycle did not start exactly once\n";
++        return false;
++    }
++
++    for (unsigned int frame = 0; frame < 4; ++frame) {
++        if (policy.consumeStillFrame() != StillCapturePolicy::FrameDecision::Skip) {
++            std::cerr << "Warm-up frame was not skipped\n";
++            return false;
++        }
++    }
++
++    if (policy.consumeStillFrame() != StillCapturePolicy::FrameDecision::CaptureAndRestore
++        || !policy.captureInProgress()
++        || policy.consumeStillFrame() != StillCapturePolicy::FrameDecision::Ignore
++        || policy.beginCapture()) {
++        std::cerr << "Fifth frame did not transition to restore exactly once\n";
++        return false;
++    }
++
++    policy.viewfinderRestored();
++    if (policy.captureInProgress() || !policy.beginCapture()) {
++        std::cerr << "A restored viewfinder did not accept the next capture\n";
++        return false;
++    }
++
++    policy.reset();
++    if (policy.captureInProgress()
++        || policy.consumeStillFrame() != StillCapturePolicy::FrameDecision::Ignore) {
++        std::cerr << "Reset did not cancel capture state\n";
++        return false;
++    }
++
++    return true;
++}
++
++}
++
++int main()
++{
++    if (!testPreviewLimit() || !testSingleCaptureCycle()) {
++        return 1;
++    }
++
++    return 0;
++}
+diff --git a/src/tests/videoframesubmissionpolicytest.cpp b/src/tests/videoframesubmissionpolicytest.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..a2d967e6f8cba53af97ec9fd73f82065ad6d9116
+--- /dev/null
++++ b/src/tests/videoframesubmissionpolicytest.cpp
+@@ -0,0 +1,194 @@
++// SPDX-FileCopyrightText: 2026 Kostiantyn Andriiuk
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#include <cstddef>
++#include <cstdint>
++#include <iostream>
++
++#include "src/plasmacamera/videoframesubmissionpolicy.h"
++
++namespace
++{
++
++bool testPreviewPresentationState()
++{
++    VideoFrameSubmissionPolicy policy;
++    if (!policy.shouldPresentPreview()) {
++        std::cerr << "Idle preview presentation was suppressed\n";
++        return false;
++    }
++
++    policy.startSession(30.0);
++    constexpr bool expectedPresentation[] = {
++        true,
++        false,
++        false,
++        false,
++        false,
++        false,
++        true,
++        false,
++        false,
++        false,
++        false,
++        false,
++        true,
++    };
++    for (std::size_t index = 0;
++         index < sizeof(expectedPresentation) / sizeof(expectedPresentation[0]);
++         ++index) {
++        if (policy.shouldPresentPreview() != expectedPresentation[index]) {
++            std::cerr << "Recording preview cadence mismatch at frame " << index
++                      << '\n';
++            return false;
++        }
++    }
++
++    policy.stopSession();
++    if (!policy.shouldPresentPreview()) {
++        std::cerr << "Preview presentation was not restored after recording\n";
++        return false;
++    }
++
++    policy.startSession(30.0);
++    if (!policy.shouldPresentPreview() || policy.shouldPresentPreview()) {
++        std::cerr << "Recording preview cadence did not reset for a new session\n";
++        return false;
++    }
++    policy.stopSession();
++
++    return true;
++}
++
++bool testUniqueFramesAndBackpressure()
++{
++    VideoFrameSubmissionPolicy policy;
++    policy.startSession(24.0);
++
++    if (!policy.offerFrame(1, 1'000'000)) {
++        std::cerr << "First camera frame was not accepted\n";
++        return false;
++    }
++
++    const auto first = policy.pendingFrame();
++    if (!first || first->sequence != 1 || first->startTimeUs != 0
++        || first->endTimeUs != 41'666) {
++        std::cerr << "First frame timing is not session-relative\n";
++        return false;
++    }
++
++    policy.frameSubmitted();
++    if (policy.pendingFrame()) {
++        std::cerr << "A submitted frame could be sent twice\n";
++        return false;
++    }
++    if (policy.offerFrame(1, 1'000'000)) {
++        std::cerr << "A submitted source-frame sequence was accepted twice\n";
++        return false;
++    }
++
++    if (!policy.offerFrame(2, 1'033'000)) {
++        std::cerr << "Second unique camera frame was not accepted\n";
++        return false;
++    }
++
++    const auto second = policy.pendingFrame();
++    if (!second || second->sequence != 2 || second->startTimeUs != 33'000
++        || second->endTimeUs != 74'666) {
++        std::cerr << "Second frame did not retain capture cadence\n";
++        return false;
++    }
++
++    // Simulate a full recorder queue: do not acknowledge frame 2. A readiness
++    // callback must expose the same pending frame, not invent a duplicate.
++    const auto retry = policy.pendingFrame();
++    if (!retry || retry->sequence != 2 || retry->startTimeUs != second->startTimeUs) {
++        std::cerr << "Backpressure retry changed the pending frame\n";
++        return false;
++    }
++
++    if (!policy.offerFrame(3, 1'066'000)) {
++        std::cerr << "Latest camera frame did not replace a blocked frame\n";
++        return false;
++    }
++
++    const auto replacement = policy.pendingFrame();
++    if (!replacement || replacement->sequence != 3
++        || replacement->startTimeUs != 66'000) {
++        std::cerr << "Backpressure did not retain only the latest unique frame\n";
++        return false;
++    }
++
++    policy.frameSubmitted();
++    if (policy.pendingFrame()) {
++        std::cerr << "Replacement frame remained pending after submission\n";
++        return false;
++    }
++
++    if (!policy.offerFrame(4, 1'100'000)) {
++        std::cerr << "Frame after backpressure recovery was not accepted\n";
++        return false;
++    }
++
++    const auto recovered = policy.pendingFrame();
++    if (!recovered || recovered->sequence != 4
++        || recovered->startTimeUs != 100'000) {
++        std::cerr << "Dropped pending frame incorrectly changed the timestamp epoch\n";
++        return false;
++    }
++
++    return true;
++}
++
++bool testPerSessionTimestamps()
++{
++    VideoFrameSubmissionPolicy policy;
++    policy.startSession(30.0);
++    policy.offerFrame(10, 8'000'000);
++    const auto firstSession = policy.pendingFrame();
++    if (!firstSession || firstSession->startTimeUs != 0
++        || firstSession->endTimeUs != 33'332) {
++        std::cerr << "First session did not start at zero\n";
++        return false;
++    }
++    policy.frameSubmitted();
++    policy.stopSession();
++
++    if (policy.offerFrame(11, 8'100'000) || policy.pendingFrame()) {
++        std::cerr << "Stopped recording accepted a camera frame\n";
++        return false;
++    }
++
++    policy.startSession(30.0);
++    policy.offerFrame(20, 20'000'000);
++    const auto secondSession = policy.pendingFrame();
++    if (!secondSession || secondSession->sequence != 20
++        || secondSession->startTimeUs != 0
++        || secondSession->endTimeUs != 33'332) {
++        std::cerr << "Second recording leaked the prior timestamp epoch\n";
++        return false;
++    }
++
++    policy.frameSubmitted();
++    policy.offerFrame(21, 20'000'000);
++    const auto equalArrival = policy.pendingFrame();
++    if (!equalArrival || equalArrival->startTimeUs != 1
++        || equalArrival->endTimeUs != 33'333) {
++        std::cerr << "Equal capture times were not made strictly monotonic\n";
++        return false;
++    }
++
++    return true;
++}
++
++}
++
++int main()
++{
++    if (!testPreviewPresentationState() || !testUniqueFramesAndBackpressure()
++        || !testPerSessionTimestamps()) {
++        return 1;
++    }
++
++    return 0;
++}
+diff --git a/src/tests/videostreampolicytest.cpp b/src/tests/videostreampolicytest.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..4b186caa3bf75c539119f2f4f2e91bbc89b8b31e
+--- /dev/null
++++ b/src/tests/videostreampolicytest.cpp
+@@ -0,0 +1,107 @@
++// SPDX-FileCopyrightText: 2026 Kostiantyn Andriiuk
++// SPDX-License-Identifier: GPL-2.0-or-later
++
++#include <iostream>
++
++#include "src/plasmacamera/videostreampolicy.h"
++
++namespace
++{
++
++bool testSupportedSourceMapping()
++{
++    const VideoStreamPolicy::Size preview = VideoStreamPolicy::previewSize();
++    if (preview.width != 952 || preview.height != 540) {
++        std::cerr << "Accepted preview size changed\n";
++        return false;
++    }
++
++    const auto source720p = VideoStreamPolicy::sourceSizeForOutput({1280, 720});
++    if (!source720p || source720p->width != 1272 || source720p->height != 720) {
++        std::cerr << "720p was not mapped to the measured-safe recording request\n";
++        return false;
++    }
++
++    if (VideoStreamPolicy::sourceSizeForOutput({960, 540})
++        || VideoStreamPolicy::sourceSizeForOutput({1920, 1080})
++        || VideoStreamPolicy::sourceSizeForOutput({2560, 1440})
++        || VideoStreamPolicy::sourceSizeForOutput({3840, 2160})) {
++        std::cerr << "An unproved recording size entered the native path\n";
++        return false;
++    }
++
++    return true;
++}
++
++bool testRecordingAndRestoreCycle()
++{
++    VideoStreamPolicy policy;
++    if (policy.recording() || policy.transitionInProgress()) {
++        std::cerr << "Policy did not start in preview\n";
++        return false;
++    }
++
++    const auto requested = policy.beginRecording({1280, 720});
++    if (!requested || requested->width != 1272 || requested->height != 720
++        || policy.recording() || !policy.transitionInProgress()
++        || policy.beginRecording({1280, 720})) {
++        std::cerr << "720p preparation did not start exactly once\n";
++        return false;
++    }
++
++    if (!policy.recordingStreamReady() || !policy.recording()
++        || policy.transitionInProgress() || policy.recordingStreamReady()) {
++        std::cerr << "Recording stream readiness transition is invalid\n";
++        return false;
++    }
++
++    const auto restore = policy.beginRestore();
++    if (!restore || restore->width != 952 || restore->height != 540
++        || policy.recording() || !policy.transitionInProgress()
++        || policy.beginRestore()) {
++        std::cerr << "Preview restore did not start exactly once\n";
++        return false;
++    }
++
++    if (!policy.previewStreamReady() || policy.recording()
++        || policy.transitionInProgress() || policy.previewStreamReady()) {
++        std::cerr << "Preview readiness transition is invalid\n";
++        return false;
++    }
++
++    return true;
++}
++
++bool testUnsupportedAndReset()
++{
++    VideoStreamPolicy policy;
++    if (policy.beginRecording({1920, 1080}) || policy.transitionInProgress()) {
++        std::cerr << "Unproved 1080p source was accepted\n";
++        return false;
++    }
++
++    if (!policy.beginRecording({1280, 720})) {
++        std::cerr << "Supported recording did not begin\n";
++        return false;
++    }
++    policy.reset();
++    if (policy.recording() || policy.transitionInProgress()
++        || !policy.beginRecording({1280, 720})) {
++        std::cerr << "Reset did not return to preview\n";
++        return false;
++    }
++
++    return true;
++}
++
++}
++
++int main()
++{
++    if (!testSupportedSourceMapping() || !testRecordingAndRestoreCycle()
++        || !testUnsupportedAndReset()) {
++        return 1;
++    }
++
++    return 0;
++}

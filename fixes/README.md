@@ -12,6 +12,8 @@ each hardware or software area.
 - [OV12A10 rear camera](ov12a10-camera.md)
 - [DW9763 bounded manual focus](dw9763-manual-focus.md)
 - [OV12A10 one-shot autofocus](ov12a10-autofocus.md)
+- [Plasma Camera: hardware-encoded video with Mic2 sound](plasma-camera-video.md)
+- [KRecorder: recording from the normal icon](krecorder.md)
 - [PMI8950 dual-colour rear torch](pmi8950-torch.md)
 - [Angelfish rendering workaround](angelfish-rendering.md)
 - [Qt WebEngine hardware video through Qualcomm Venus](hardware-video.md)

@@ -1,0 +1,42 @@
+From 215420a9e57b979a208010294bd0174e2d5d816c Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Tue, 8 Sep 2026 16:33:40 +0300
+Subject: [PATCH] Apply video settings to V4L2 M2M bitrate
+
+---
+ .../recordingengine/qffmpegencoderoptions.cpp     | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegencoderoptions.cpp b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegencoderoptions.cpp
+index cd50a8f..3199f6d 100644
+--- a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegencoderoptions.cpp
++++ b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegencoderoptions.cpp
+@@ -70,6 +70,20 @@ static int bitrateForSettings(const QMediaEncoderSettings &settings, bool hdr =
+     return bitrate;
+ }
+ 
++static void apply_v4l2m2m(const QMediaEncoderSettings &settings, AVCodecContext *codec,
++                          AVDictionary ** /*opts*/)
++{
++    const int bitrate = settings.videoBitRate() > 0 ? settings.videoBitRate()
++                                                    : bitrateForSettings(settings);
++    codec->bit_rate = bitrate;
++
++    qInfo().nospace() << "[VINCE-BITRATE-r18] codec=" << codec->codec->name
++                      << " resolution=" << settings.videoResolution()
++                      << " frameRate=" << settings.videoFrameRate()
++                      << " quality=" << settings.quality()
++                      << " bitrate=" << bitrate;
++}
++
+ static void apply_openh264(const QMediaEncoderSettings &settings, AVCodecContext *codec,
+                            AVDictionary **opts)
+ {
+@@ -355,6 +369,7 @@ const VideoCodecOptionsTableType videoCodecOptionTable{
+     { "libvpx"_L1, apply_libvpx },
+     { "libvpx_vp9"_L1, apply_libvpx },
+     { "libopenh264"_L1, apply_openh264 },
++    { "h264_v4l2m2m"_L1, apply_v4l2m2m },
+     { "h264_nvenc"_L1, apply_nvenc },
+     { "hevc_nvenc"_L1, apply_nvenc },
+     { "av1_nvenc"_L1, apply_nvenc },

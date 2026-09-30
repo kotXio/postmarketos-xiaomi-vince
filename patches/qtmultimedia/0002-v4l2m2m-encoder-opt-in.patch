@@ -1,0 +1,132 @@
+From 9e74981aa63a2c6955e5d49806e2e8b03c6e4337 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sun, 6 Sep 2026 20:55:32 +0300
+Subject: [PATCH] Enable opt-in V4L2 M2M encoding
+
+---
+ .../multimedia/ffmpeg/qffmpegcodecstorage.cpp | 15 ++++++++++-
+ .../multimedia/ffmpeg/qffmpegcodecstorage_p.h |  2 ++
+ .../qffmpegvideoencoderutils.cpp              | 10 +++++++
+ .../tst_qffmpegvideoencoderutils.cpp          | 26 +++++++++++++++++++
+ 4 files changed, 52 insertions(+), 1 deletion(-)
+
+diff --git a/src/plugins/multimedia/ffmpeg/qffmpegcodecstorage.cpp b/src/plugins/multimedia/ffmpeg/qffmpegcodecstorage.cpp
+index b297d16..b9c6bc7 100644
+--- a/src/plugins/multimedia/ffmpeg/qffmpegcodecstorage.cpp
++++ b/src/plugins/multimedia/ffmpeg/qffmpegcodecstorage.cpp
+@@ -34,6 +34,18 @@ Q_STATIC_LOGGING_CATEGORY(qLcCodecStorage, "qt.multimedia.ffmpeg.codecstorage");
+ 
+ namespace QFFmpeg {
+ 
++bool isV4L2M2MEncoderEnabled(const Codec &codec)
++{
++#if defined(Q_OS_LINUX)
++    return codec.isEncoder()
++            && codec.name().contains(QLatin1StringView{ "_v4l2m2m" })
++            && qEnvironmentVariableIntValue("QT_FFMPEG_ENABLE_V4L2M2M_ENCODING") > 0;
++#else
++    Q_UNUSED(codec);
++    return false;
++#endif
++}
++
+ namespace {
+ 
+ enum CodecStorageType {
+@@ -196,7 +208,8 @@ bool isCodecValid(const Codec &codec, const std::vector<AVHWDeviceType> &availab
+ #if defined(Q_OS_LINUX) || defined(Q_OS_ANDROID)
+         //  Disable V4L2 M2M codecs for encoding for now,
+         //  TODO: Investigate on how to get them working
+-        if (codec.name().contains(QLatin1StringView{ "_v4l2m2m" }) && codec.isEncoder())
++        if (codec.name().contains(QLatin1StringView{ "_v4l2m2m" }) && codec.isEncoder()
++            && !isV4L2M2MEncoderEnabled(codec))
+             return false;
+ 
+         // MediaCodec in Android is used for hardware-accelerated media processing. That is why
+diff --git a/src/plugins/multimedia/ffmpeg/qffmpegcodecstorage_p.h b/src/plugins/multimedia/ffmpeg/qffmpegcodecstorage_p.h
+index 90134b1..e785742 100644
+--- a/src/plugins/multimedia/ffmpeg/qffmpegcodecstorage_p.h
++++ b/src/plugins/multimedia/ffmpeg/qffmpegcodecstorage_p.h
+@@ -26,6 +26,8 @@ QT_BEGIN_NAMESPACE
+ namespace QFFmpeg {
+ class Codec;
+ 
++bool isV4L2M2MEncoderEnabled(const Codec &codec);
++
+ bool findAndOpenAVDecoder(AVCodecID codecId,
+                           const std::function<AVScore(const Codec &)> &scoresGetter,
+                           const std::function<bool(const Codec &)> &codecOpener);
+diff --git a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegvideoencoderutils.cpp b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegvideoencoderutils.cpp
+index 60b9edc..ba116b7 100644
+--- a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegvideoencoderutils.cpp
++++ b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegvideoencoderutils.cpp
+@@ -143,6 +143,13 @@ std::optional<AVPixelFormat> findTargetFormat(AVPixelFormat sourceFormat,
+ 
+     const auto pixelFormats = codec.pixelFormats();
+     if (pixelFormats.empty()) {
++        if (isV4L2M2MEncoderEnabled(codec)) {
++            if (prohibitedFormats.count(AV_PIX_FMT_NV12))
++                return std::nullopt;
++
++            return AV_PIX_FMT_NV12;
++        }
++
+         qWarning() << "Codec pix formats are undefined, it's likely to behave incorrectly";
+ 
+         return sourceSWFormat;
+@@ -155,6 +162,9 @@ std::optional<AVPixelFormat> findTargetFormat(AVPixelFormat sourceFormat,
+ AVScore findSWFormatScores(const Codec &codec, AVPixelFormat sourceSWFormat)
+ {
+     const auto pixelFormats = codec.pixelFormats();
++    if (pixelFormats.empty() && isV4L2M2MEncoderEnabled(codec))
++        return BestAVScore;
++
+     if (pixelFormats.empty())
+         // codecs without pixel formats are suspicious
+         return MinAVScore;
+diff --git a/tests/auto/unit/plugins/multimedia/ffmpeg/qffmpegvideoencoderutils/tst_qffmpegvideoencoderutils.cpp b/tests/auto/unit/plugins/multimedia/ffmpeg/qffmpegvideoencoderutils/tst_qffmpegvideoencoderutils.cpp
+index e20aeb9..7b0fda8 100644
+--- a/tests/auto/unit/plugins/multimedia/ffmpeg/qffmpegvideoencoderutils/tst_qffmpegvideoencoderutils.cpp
++++ b/tests/auto/unit/plugins/multimedia/ffmpeg/qffmpegvideoencoderutils/tst_qffmpegvideoencoderutils.cpp
+@@ -5,6 +5,8 @@
+ 
+ #include <qobject.h>
+ 
++#include <QtFFmpegMediaPluginImpl/private/qffmpegcodec_p.h>
++#include <QtFFmpegMediaPluginImpl/private/qffmpegcodecstorage_p.h>
+ #include <QtFFmpegMediaPluginImpl/private/qffmpegvideoencoderutils_p.h>
+ 
+ QT_USE_NAMESPACE
+@@ -18,8 +20,32 @@ class tst_QFFmpegVideoEncoderUtils : public QObject
+ private slots:
+     void getScaleConversionType_returnsCorrectConversionType_basedOnScaling();
+     void getScaleConversionType_returnsCorrectConversionType_basedOnScaling_data();
++    void v4l2M2MEncoder_isOptInAndUsesNV12();
+ };
+ 
++void tst_QFFmpegVideoEncoderUtils::v4l2M2MEncoder_isOptInAndUsesNV12()
++{
++    const AVCodec *rawCodec = avcodec_find_encoder_by_name("h264_v4l2m2m");
++    if (!rawCodec)
++        QSKIP("FFmpeg does not provide h264_v4l2m2m");
++
++    const Codec codec(rawCodec);
++
++    qunsetenv("QT_FFMPEG_ENABLE_V4L2M2M_ENCODING");
++    QVERIFY(!isV4L2M2MEncoderEnabled(codec));
++    QCOMPARE(findSWFormatScores(codec, AV_PIX_FMT_BGRA), MinAVScore);
++
++    qputenv("QT_FFMPEG_ENABLE_V4L2M2M_ENCODING", "1");
++    QVERIFY(isV4L2M2MEncoderEnabled(codec));
++    QCOMPARE(findSWFormatScores(codec, AV_PIX_FMT_BGRA), BestAVScore);
++
++    const auto targetFormat = findTargetFormat(AV_PIX_FMT_BGRA, AV_PIX_FMT_BGRA, codec, nullptr);
++    QVERIFY(targetFormat);
++    QCOMPARE(*targetFormat, AV_PIX_FMT_NV12);
++
++    qunsetenv("QT_FFMPEG_ENABLE_V4L2M2M_ENCODING");
++}
++
+ void tst_QFFmpegVideoEncoderUtils::getScaleConversionType_returnsCorrectConversionType_basedOnScaling_data()
+ {
+     QTest::addColumn<QSize>("sourceSize");

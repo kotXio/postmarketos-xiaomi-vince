@@ -1,0 +1,335 @@
+From 5fbc0f9ff3b823aea3a58626ceae25144f899c65 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Mon, 7 Sep 2026 16:30:14 +0300
+Subject: [PATCH] Trace vince audio PCM flow
+
+---
+ .../qaudiosystem_platform_stream_support.cpp  | 20 +++++++++
+ .../qaudiosystem_platform_stream_support_p.h  |  2 +
+ .../pulseaudio/qpulseaudiosource.cpp          | 14 ++++++
+ .../pulseaudio/qpulseaudiosource_p.h          |  1 +
+ .../multimedia/ffmpeg/qffmpegaudioinput.cpp   | 35 +++++++++++++--
+ .../recordingengine/qffmpegaudioencoder.cpp   | 43 +++++++++++++++++--
+ .../recordingengine/qffmpegaudioencoder_p.h   |  5 +++
+ 7 files changed, 114 insertions(+), 6 deletions(-)
+
+diff --git a/src/multimedia/audio/qaudiosystem_platform_stream_support.cpp b/src/multimedia/audio/qaudiosystem_platform_stream_support.cpp
+index d2530f6..5e84dcb 100644
+--- a/src/multimedia/audio/qaudiosystem_platform_stream_support.cpp
++++ b/src/multimedia/audio/qaudiosystem_platform_stream_support.cpp
+@@ -13,6 +13,13 @@ namespace QtMultimediaPrivate {
+ 
+ using namespace std::chrono_literals;
+ 
++namespace {
++bool vinceAudioShouldTrace(uint64_t count)
++{
++    return count <= 16 || count % 128 == 0;
++}
++} // namespace
++
+ QPlatformAudioIOStream::QPlatformAudioIOStream(QAudioDevice m_audioDevice, QAudioFormat m_format,
+                                                std::optional<int> ringbufferSize,
+                                                std::optional<int32_t> hardwareBufferFrames,
+@@ -336,6 +343,8 @@ uint64_t QPlatformAudioSourceStream::process(
+         QSpan<const std::byte> hostBuffer, qsizetype numberOfFrames,
+         std::optional<NativeSampleFormat> nativeFormat) noexcept QT_MM_NONBLOCKING
+ {
++    const qsizetype hostBytes = hostBuffer.size_bytes();
++    const uint64_t call = m_vinceProcessCalls.fetch_add(1, std::memory_order_relaxed) + 1;
+     qsizetype remainingNumberOfSamples = numberOfFrames * m_format.channelCount();
+ 
+     const float vol = volume();
+@@ -372,6 +381,10 @@ uint64_t QPlatformAudioSourceStream::process(
+ 
+     uint64_t framesWritten = totalSamplesWritten / m_format.channelCount();
+     m_totalNumberOfFramesPushedToRingbuffer += framesWritten;
++    if (vinceAudioShouldTrace(call))
++        qInfo().nospace() << "[VINCE-AUDIO-r15] SourceStream process call=" << call
++                          << " hostBytes=" << hostBytes << " requestedFrames=" << numberOfFrames
++                          << " writtenFrames=" << framesWritten << " bytesReady=" << bytesReady();
+     return framesWritten;
+ }
+ 
+@@ -379,10 +392,17 @@ void QPlatformAudioSourceStream::pushToIODevice()
+ {
+     Q_ASSERT(thread()->isCurrentThread());
+ 
++    const uint64_t call = m_vincePushCalls.fetch_add(1, std::memory_order_relaxed) + 1;
++    const qsizetype bytesBefore = bytesReady();
+     qsizetype bytesPushed = visitRingbuffer([&](auto &ringbuffer) {
+         return QtPrivate::pushToQIODeviceFromRingbuffer(*m_device, ringbuffer);
+     });
+ 
++    if (vinceAudioShouldTrace(call))
++        qInfo().nospace() << "[VINCE-AUDIO-r15] SourceStream pushToIODevice call=" << call
++                          << " before=" << bytesBefore << " pushed=" << bytesPushed
++                          << " after=" << bytesReady();
++
+     if (bytesPushed)
+         Q_EMIT m_device->readyRead();
+ }
+diff --git a/src/multimedia/audio/qaudiosystem_platform_stream_support_p.h b/src/multimedia/audio/qaudiosystem_platform_stream_support_p.h
+index a70b5c0..e8dca0e 100644
+--- a/src/multimedia/audio/qaudiosystem_platform_stream_support_p.h
++++ b/src/multimedia/audio/qaudiosystem_platform_stream_support_p.h
+@@ -311,6 +311,8 @@ private:
+ 
+     // stats
+     std::atomic_uint64_t m_totalNumberOfFramesPushedToRingbuffer{};
++    std::atomic_uint64_t m_vinceProcessCalls{};
++    std::atomic_uint64_t m_vincePushCalls{};
+ 
+     void convertFromNative(QSpan<const std::byte> native, QSpan<std::byte> internal, float volume,
+                            NativeSampleFormat) noexcept QT_MM_NONBLOCKING;
+diff --git a/src/multimedia/pulseaudio/qpulseaudiosource.cpp b/src/multimedia/pulseaudio/qpulseaudiosource.cpp
+index f74df22..e3e29da 100644
+--- a/src/multimedia/pulseaudio/qpulseaudiosource.cpp
++++ b/src/multimedia/pulseaudio/qpulseaudiosource.cpp
+@@ -16,6 +16,13 @@ namespace QPulseAudioInternal {
+ 
+ using namespace QtMultimediaPrivate;
+ 
++namespace {
++bool vinceAudioShouldTrace(uint64_t count)
++{
++    return count <= 16 || count % 128 == 0;
++}
++} // namespace
++
+ QPulseAudioSourceStream::QPulseAudioSourceStream(QAudioDevice device, const QAudioFormat &format,
+                                                  std::optional<qsizetype> ringbufferSize,
+                                                  QPulseAudioSource *parent,
+@@ -197,6 +204,7 @@ void QPulseAudioSourceStream::uninstallCallbacks()
+ 
+ void QPulseAudioSourceStream::readCallbackRingbuffer([[maybe_unused]] size_t bytesToRead)
+ {
++    const uint64_t call = ++m_vinceReadCallbackCount;
+     const void *data{};
+     size_t nBytes{};
+     int status = pa_stream_peek(m_stream.get(), &data, &nBytes);
+@@ -217,6 +225,12 @@ void QPulseAudioSourceStream::readCallbackRingbuffer([[maybe_unused]] size_t byt
+     [[maybe_unused]] uint64_t framesWritten =
+             QPlatformAudioSourceStream::process(hostBuffer, numberOfFrames);
+     status = pa_stream_drop(m_stream.get());
++    if (vinceAudioShouldTrace(call))
++        qCDebug(qLcPulseAudioIn).nospace()
++                << "[VINCE-AUDIO-r15] Pulse read call=" << call
++                << " requestedBytes=" << bytesToRead << " peekBytes=" << nBytes
++                << " frames=" << numberOfFrames << " writtenFrames=" << framesWritten
++                << " bytesReady=" << bytesReady() << " dropStatus=" << status;
+     if (status < 0) {
+         if (!isStopRequested()) {
+             invokeOnAppThread([this] {
+diff --git a/src/multimedia/pulseaudio/qpulseaudiosource_p.h b/src/multimedia/pulseaudio/qpulseaudiosource_p.h
+index c158bf9..473baf0 100644
+--- a/src/multimedia/pulseaudio/qpulseaudiosource_p.h
++++ b/src/multimedia/pulseaudio/qpulseaudiosource_p.h
+@@ -70,6 +70,7 @@ private:
+     QPulseAudioSource *m_parent;
+     PAStreamHandle m_stream;
+     std::optional<AudioCallback> m_audioCallback;
++    uint64_t m_vinceReadCallbackCount = 0;
+ 
+     // PulseAudio callbacks
+     void readCallbackRingbuffer(size_t bytesToRead);
+diff --git a/src/plugins/multimedia/ffmpeg/qffmpegaudioinput.cpp b/src/plugins/multimedia/ffmpeg/qffmpegaudioinput.cpp
+index c20e585..b39e8fd 100644
+--- a/src/plugins/multimedia/ffmpeg/qffmpegaudioinput.cpp
++++ b/src/plugins/multimedia/ffmpeg/qffmpegaudioinput.cpp
+@@ -13,6 +13,13 @@ QT_BEGIN_NAMESPACE
+ 
+ namespace QFFmpeg {
+ 
++namespace {
++bool vinceAudioShouldTrace(quint64 count)
++{
++    return count <= 16 || count % 128 == 0;
++}
++} // namespace
++
+ class AudioSourceIO : public QIODevice
+ {
+     Q_OBJECT
+@@ -47,9 +54,12 @@ public:
+     }
+     void setBufferSize(int bufferSize)
+     {
+-        m_bufferSize.storeRelease((bufferSize > 0 && m_format.isValid())
+-                                          ? m_format.bytesForFrames(bufferSize)
+-                                          : DefaultAudioInputBufferSize);
++        const int bytes = (bufferSize > 0 && m_format.isValid())
++                ? m_format.bytesForFrames(bufferSize)
++                : DefaultAudioInputBufferSize;
++        m_bufferSize.storeRelease(bytes);
++        qInfo().nospace() << "[VINCE-AUDIO-r15] AudioSourceIO setBufferSize frames=" << bufferSize
++                          << " bytes=" << bytes << " formatValid=" << m_format.isValid();
+     }
+     void setRunning(bool r) {
+         Q_ASSERT(!thread()->isCurrentThread());
+@@ -84,6 +94,12 @@ protected:
+     {
+         Q_ASSERT(m_audioSource);
+ 
++        const quint64 call = ++m_writeDataCalls;
++        if (vinceAudioShouldTrace(call))
++            qInfo().nospace() << "[VINCE-AUDIO-r15] AudioSourceIO writeData call=" << call
++                              << " len=" << len << " targetBytes=" << bufferSize()
++                              << " pcmBefore=" << m_pcm.size() << " processed=" << m_processed;
++
+         int l = len;
+         while (len > 0) {
+             const auto bufferSize = m_bufferSize.loadAcquire();
+@@ -118,6 +134,8 @@ private Q_SLOTS:
+     void updateRunning()
+     {
+         QMutexLocker locker(&m_mutex);
++        qInfo().nospace() << "[VINCE-AUDIO-r15] AudioSourceIO updateRunning running=" << m_running
++                          << " hasSource=" << bool(m_audioSource);
+         if (m_running) {
+             if (!m_audioSource)
+                 updateSource(locker);
+@@ -137,6 +155,9 @@ private:
+             m_pcm.clear();
+ 
+         m_audioSource = std::make_unique<QAudioSource>(m_device, m_format);
++        qInfo().nospace() << "[VINCE-AUDIO-r15] AudioSourceIO updateSource rate="
++                          << m_format.sampleRate() << " channels=" << m_format.channelCount()
++                          << " bytesPerFrame=" << m_format.bytesPerFrame();
+         updateVolume();
+         if (m_running)
+             m_audioSource->start(this);
+@@ -147,6 +168,12 @@ private:
+         QAudioFormat fmt = m_audioSource->format();
+         qint64 time = fmt.durationForBytes(m_processed);
+         QAudioBuffer buffer(pcmData, fmt, time);
++        const quint64 call = ++m_sendBufferCalls;
++        if (vinceAudioShouldTrace(call))
++            qInfo().nospace() << "[VINCE-AUDIO-r15] AudioSourceIO sendBuffer call=" << call
++                              << " bytes=" << pcmData.size()
++                              << " frames=" << fmt.framesForBytes(pcmData.size())
++                              << " startUs=" << time;
+         emit m_input->newAudioBuffer(buffer);
+         m_processed += pcmData.size();
+     }
+@@ -163,6 +190,8 @@ private:
+     QAtomicInt m_bufferSize = DefaultAudioInputBufferSize;
+     qint64 m_processed = 0;
+     QByteArray m_pcm;
++    quint64 m_writeDataCalls = 0;
++    quint64 m_sendBufferCalls = 0;
+ };
+ 
+ } // namespace QFFmpeg
+diff --git a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegaudioencoder.cpp b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegaudioencoder.cpp
+index a1dea9c..20447bf 100644
+--- a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegaudioencoder.cpp
++++ b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegaudioencoder.cpp
+@@ -19,6 +19,11 @@ Q_STATIC_LOGGING_CATEGORY(qLcFFmpegAudioEncoder, "qt.multimedia.ffmpeg.audioenco
+ static constexpr bool audioEncoderExtendedTracing = false;
+ 
+ namespace {
++bool vinceAudioShouldTrace(uint64_t count)
++{
++    return count <= 16 || count % 128 == 0;
++}
++
+ void setupStreamParameters(AVStream *stream, const Codec &codec,
+                            const AVAudioFormat &requestedAudioFormat)
+ {
+@@ -99,6 +104,13 @@ AudioEncoder::AudioEncoder(RecordingEngine &recordingEngine, const QAudioFormat
+ 
+ void AudioEncoder::addBuffer(const QAudioBuffer &buffer)
+ {
++    const uint64_t call = m_vinceAddBufferCalls.fetch_add(1, std::memory_order_relaxed) + 1;
++    if (vinceAudioShouldTrace(call))
++        qCDebug(qLcFFmpegAudioEncoder).nospace()
++                << "[VINCE-AUDIO-r15] AudioEncoder addBuffer call=" << call
++                << " valid=" << buffer.isValid() << " bytes=" << buffer.byteCount()
++                << " frames=" << buffer.frameCount() << " durationUs=" << buffer.duration()
++                << " startUs=" << buffer.startTime();
+     if (!buffer.isValid()) {
+         setEndOfSourceStream();
+         return;
+@@ -177,6 +189,12 @@ bool AudioEncoder::init()
+     }
+ 
+     qCDebug(qLcFFmpegAudioEncoder) << "found audio codec" << m_codecContext->codec->name;
++    qCDebug(qLcFFmpegAudioEncoder).nospace()
++            << "[VINCE-AUDIO-r15] AudioEncoder init codec=" << m_codecContext->codec->name
++            << " frameSize=" << m_codecContext->frame_size
++            << " capabilities=" << m_codecContext->codec->capabilities
++            << " sourceRate=" << m_sourceFormat.sampleRate()
++            << " sourceChannels=" << m_sourceFormat.channelCount();
+ 
+     updateResampler(m_sourceFormat);
+ 
+@@ -225,9 +243,13 @@ void AudioEncoder::retrievePackets()
+             return;
+         }
+ 
+-        if constexpr (audioEncoderExtendedTracing)
+-            qCDebug(qLcFFmpegAudioEncoder)
+-                    << "writing audio packet" << packet->size << packet->pts << packet->dts;
++        const uint64_t call = m_vincePacketCalls.fetch_add(1, std::memory_order_relaxed) + 1;
++        if (vinceAudioShouldTrace(call))
++            qCDebug(qLcFFmpegAudioEncoder).nospace()
++                    << "[VINCE-AUDIO-r15] AudioEncoder packet call=" << call
++                    << " size=" << packet->size << " pts=" << packet->pts
++                    << " dts=" << packet->dts << " duration=" << packet->duration
++                    << " timeBase=" << packet->time_base.num << "/" << packet->time_base.den;
+         packet->stream_index = m_stream->id;
+         m_recordingEngine.getMuxer()->addPacket(std::move(packet));
+     }
+@@ -238,6 +260,14 @@ void AudioEncoder::processOne()
+     QAudioBuffer buffer = takeBuffer();
+     Q_ASSERT(buffer.isValid());
+ 
++    const uint64_t call =
++            m_vinceProcessBufferCalls.fetch_add(1, std::memory_order_relaxed) + 1;
++    if (vinceAudioShouldTrace(call))
++        qCDebug(qLcFFmpegAudioEncoder).nospace()
++                << "[VINCE-AUDIO-r15] AudioEncoder processOne call=" << call
++                << " bytes=" << buffer.byteCount() << " frames=" << buffer.frameCount()
++                << " durationUs=" << buffer.duration();
++
+     if constexpr (audioEncoderExtendedTracing)
+         qCDebug(qLcFFmpegAudioEncoder)
+                 << "new audio buffer" << buffer.byteCount() << buffer.format()
+@@ -387,6 +417,13 @@ void AudioEncoder::sendPendingFrameToAVCodec()
+                                        << m_codecContext->frame_size << m_avFrame->pts;
+ 
+     int ret = avcodec_send_frame(m_codecContext.get(), m_avFrame.get());
++    const uint64_t call =
++            m_vinceSendFrameCalls.fetch_add(1, std::memory_order_relaxed) + 1;
++    if (vinceAudioShouldTrace(call))
++        qCDebug(qLcFFmpegAudioEncoder).nospace()
++                << "[VINCE-AUDIO-r15] AudioEncoder sendFrame call=" << call
++                << " samples=" << m_avFrame->nb_samples << " pts=" << m_avFrame->pts
++                << " result=" << ret << " totalSamples=" << m_samplesWritten;
+     if (ret < 0)
+         qCDebug(qLcFFmpegAudioEncoder) << "error sending frame" << ret << QFFmpeg::AVError(ret);
+ 
+diff --git a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegaudioencoder_p.h b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegaudioencoder_p.h
+index 1e14333..bad4de5 100644
+--- a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegaudioencoder_p.h
++++ b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegaudioencoder_p.h
+@@ -20,6 +20,7 @@
+ #include <qaudiobuffer.h>
+ #include <queue>
+ #include <chrono>
++#include <atomic>
+ 
+ QT_BEGIN_NAMESPACE
+ 
+@@ -75,6 +76,10 @@ private:
+     AVFrameUPtr m_avFrame;
+     int m_avFrameSamplesOffset = 0;
+     std::vector<uint8_t *> m_avFramePlanesData;
++    std::atomic_uint64_t m_vinceAddBufferCalls{};
++    std::atomic_uint64_t m_vinceProcessBufferCalls{};
++    std::atomic_uint64_t m_vinceSendFrameCalls{};
++    std::atomic_uint64_t m_vincePacketCalls{};
+ };
+ 
+ 

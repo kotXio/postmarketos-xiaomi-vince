@@ -217,6 +217,43 @@ The final tested source heads are
 test handset. The raw EEPROM is not published, and the values are not claimed
 to be universal for every `vince`.
 
+## Plasma Camera recording and KRecorder
+
+The [Camera recording patch](patches/plasma-camera/README.md) extends KDE's
+[Plasma Camera `v2.1.1`](https://invent.kde.org/plasma-mobile/plasma-camera/-/tree/v2.1.1)
+(`29d46b59e2159f90b0eeb9bca94906e667cfaecf`) after the project's autofocus
+patch. Frame submission, native-source selection, preview pacing and the
+earlier still/refocus changes are by Kostiantyn Andriiuk
+<konstantin@andriyuk.com>. The resulting source is
+`94a6e0e87754b21bc289c1e04090e57e9b3053d0`.
+
+The [Qt recording series](patches/qtmultimedia/README.md) modifies the official
+[Qt Multimedia `6.11.1` sources](https://github.com/qt/qtmultimedia/tree/v6.11.1).
+Its recipe derives from Alpine's
+[`qt6-qtmultimedia` aport](https://github.com/alpinelinux/aports/blob/98335a210042e9ed5058521c60378805b19a83b3/community/qt6-qtmultimedia/APKBUILD),
+maintained by Bart Ribbers. Alpine's
+[`select.patch`](https://github.com/alpinelinux/aports/blob/98335a210042e9ed5058521c60378805b19a83b3/community/qt6-qtmultimedia/select.patch)
+is directly reused with refreshed context. The seven recording patches are
+project-authored; Qt and KDE copyright and licence notices are preserved.
+
+References used during implementation:
+
+- Qt's [QVideoFrameInput](https://doc.qt.io/qt-6/qvideoframeinput.html),
+  [QVideoFrame](https://doc.qt.io/qt-6/qvideoframe.html) and
+  [QMediaRecorder](https://doc.qt.io/qt-6/qmediarecorder.html) contracts for
+  frame delivery, timestamps and recording settings.
+- FFmpeg's [V4L2 buffer lifetime code](https://www.ffmpeg.org/doxygen/8.0/v4l2__buffers_8c_source.html#l00230)
+  to understand capture-buffer retention by encoded packets. FFmpeg itself is
+  not patched by this series.
+- PulseAudio's [buffer attributes](https://www.freedesktop.org/software/pulseaudio/doxygen/structpa__buffer__attr.html),
+  [latency guidance](https://wiki.freedesktop.org/www/Software/PulseAudio/Documentation/Developer/Clients/LatencyControl/)
+  and [`pacat` source](https://github.com/pulseaudio/pulseaudio/blob/master/src/utils/pacat.c)
+  for the server-default capture queue behavior. These are references, not
+  copied source patches.
+
+The KRecorder launcher override is project-authored configuration. KRecorder
+`26.04.2-r0` is unchanged; the audio fix comes from the shared Qt library.
+
 ## IPA and camera policy
 
 The project-authored `blackLevel: 4096` tuning comes from the stock RAW10

@@ -1,0 +1,72 @@
+From 6336f8c4354e1848f1d09c088c658f1bc2df8a31 Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Tue, 8 Sep 2026 14:14:55 +0300
+Subject: [PATCH] Allow server record queue headroom
+
+---
+ .../pulseaudio/qpulseaudiosource.cpp          | 22 ++++++++++++++-----
+ 1 file changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/src/multimedia/pulseaudio/qpulseaudiosource.cpp b/src/multimedia/pulseaudio/qpulseaudiosource.cpp
+index 52416f1..6cfe3e5 100644
+--- a/src/multimedia/pulseaudio/qpulseaudiosource.cpp
++++ b/src/multimedia/pulseaudio/qpulseaudiosource.cpp
+@@ -29,6 +29,14 @@ bool vinceDisableRecordLatencyAdjustment()
+             qEnvironmentVariableIntValue("QT_PULSEAUDIO_RECORD_DISABLE_ADJUST_LATENCY") != 0;
+     return disabled;
+ }
++
++bool vinceUseServerDefaultRecordMaxlength()
++{
++    // Some PulseAudio sources need queue headroom beyond the requested fragment size.
++    static const bool enabled =
++            qEnvironmentVariableIntValue("QT_PULSEAUDIO_RECORD_USE_SERVER_MAXLENGTH") != 0;
++    return enabled;
++}
+ } // namespace
+ 
+ QPulseAudioSourceStream::QPulseAudioSourceStream(QAudioDevice device, const QAudioFormat &format,
+@@ -149,12 +157,15 @@ void QPulseAudioSourceStream::updateStreamIdle(bool idle)
+ bool QPulseAudioSourceStream::startStream(StreamType streamType)
+ {
+     QPulseAudioContextManager *pulseEngine = QPulseAudioContextManager::instance();
++    const bool useServerDefaultMaxlength = vinceUseServerDefaultRecordMaxlength();
+     static const bool serverIsPipewire = [&] {
+         return pulseEngine->serverName().contains(u"PulseAudio (on PipeWire");
+     }();
+ 
+     pa_buffer_attr attr{
+-        .maxlength = uint32_t(m_format.bytesForFrames(m_hardwareBufferFrames.value_or(1024))),
++        .maxlength = useServerDefaultMaxlength
++                ? uint32_t(-1)
++                : uint32_t(m_format.bytesForFrames(m_hardwareBufferFrames.value_or(1024))),
+         .tlength = uint32_t(-1),
+         .prebuf = uint32_t(-1),
+         .minreq = uint32_t(-1),
+@@ -173,9 +184,10 @@ bool QPulseAudioSourceStream::startStream(StreamType streamType)
+                                                              : PA_STREAM_ADJUST_LATENCY));
+ 
+     qCDebug(qLcPulseAudioIn).nospace()
+-            << "[VINCE-AUDIO-r16] Pulse connect requested maxlength=" << attr.maxlength
++            << "[VINCE-AUDIO-r17] Pulse connect requested maxlength=" << attr.maxlength
+             << " fragsize=" << attr.fragsize
+-            << " adjustLatency=" << !disableLatencyAdjustment;
++            << " adjustLatency=" << !disableLatencyAdjustment
++            << " serverMaxlength=" << useServerDefaultMaxlength;
+ 
+     std::lock_guard engineLock{ *pulseEngine };
+     installCallbacks(streamType);
+@@ -224,11 +236,11 @@ void QPulseAudioSourceStream::readCallbackRingbuffer([[maybe_unused]] size_t byt
+     if (call == 1) {
+         if (const pa_buffer_attr *actual = pa_stream_get_buffer_attr(m_stream.get())) {
+             qCDebug(qLcPulseAudioIn).nospace()
+-                    << "[VINCE-AUDIO-r16] Pulse connect actual maxlength=" << actual->maxlength
++                    << "[VINCE-AUDIO-r17] Pulse connect actual maxlength=" << actual->maxlength
+                     << " fragsize=" << actual->fragsize;
+         } else {
+             qCWarning(qLcPulseAudioIn)
+-                    << "[VINCE-AUDIO-r16] pa_stream_get_buffer_attr() failed";
++                    << "[VINCE-AUDIO-r17] pa_stream_get_buffer_attr() failed";
+         }
+     }
+     const void *data{};

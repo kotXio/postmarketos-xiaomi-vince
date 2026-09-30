@@ -1,0 +1,303 @@
+From 0977ee32a04209946b8f4b2754cd417ceca650ad Mon Sep 17 00:00:00 2001
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Mon, 7 Sep 2026 14:24:42 +0300
+Subject: [PATCH] Defer one V4L2 M2M packet release
+
+---
+ .../recordingengine/qffmpegpacketutils.cpp    |   7 +-
+ .../recordingengine/qffmpegpacketutils_p.h    |   9 +-
+ .../qffmpegvideoframeencoder.cpp              |   2 +-
+ .../qffmpegvideoframeencoder_p.h              |   3 +
+ .../tst_qffmpegvideoencoderutils.cpp          | 176 ++++++++++++------
+ 5 files changed, 138 insertions(+), 59 deletions(-)
+
+diff --git a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegpacketutils.cpp b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegpacketutils.cpp
+index 8b6e9f3..5d9f08a 100644
+--- a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegpacketutils.cpp
++++ b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegpacketutils.cpp
+@@ -9,11 +9,14 @@ QT_BEGIN_NAMESPACE
+ 
+ namespace QFFmpeg {
+ 
+-AVPacketUPtr detachAVPacketPayload(AVPacketUPtr packet)
++AVPacketUPtr V4L2M2MPacketPayloadDetacher::detach(AVPacketUPtr packet)
+ {
+     if (!packet || !packet->buf)
+         return packet;
+ 
++    if (packet->size < 0)
++        return nullptr;
++
+     AVPacketUPtr detached(av_packet_alloc());
+     if (!detached || av_new_packet(detached.get(), packet->size) < 0)
+         return nullptr;
+@@ -24,6 +27,8 @@ AVPacketUPtr detachAVPacketPayload(AVPacketUPtr packet)
+     if (av_packet_copy_props(detached.get(), packet.get()) < 0)
+         return nullptr;
+ 
++    // Keep this V4L2-backed packet until the next packet has already been received and copied.
++    m_deferredPacket = std::move(packet);
+     return detached;
+ }
+ 
+diff --git a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegpacketutils_p.h b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegpacketutils_p.h
+index 9a1561c..d04e44f 100644
+--- a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegpacketutils_p.h
++++ b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegpacketutils_p.h
+@@ -19,7 +19,14 @@ QT_BEGIN_NAMESPACE
+ 
+ namespace QFFmpeg {
+ 
+-AVPacketUPtr detachAVPacketPayload(AVPacketUPtr packet);
++class V4L2M2MPacketPayloadDetacher
++{
++public:
++    AVPacketUPtr detach(AVPacketUPtr packet);
++
++private:
++    AVPacketUPtr m_deferredPacket;
++};
+ 
+ } // namespace QFFmpeg
+ 
+diff --git a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegvideoframeencoder.cpp b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegvideoframeencoder.cpp
+index 1791eb8..a6fd65e 100644
+--- a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegvideoframeencoder.cpp
++++ b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegvideoframeencoder.cpp
+@@ -582,7 +582,7 @@ AVPacketUPtr VideoFrameEncoder::retrievePacket()
+     while (auto packet = getPacket()) {
+         if (fixPacketDts(*packet)) {
+             if (isV4L2M2MEncoder(Codec(m_codecContext->codec))) {
+-                packet = detachAVPacketPayload(std::move(packet));
++                packet = m_v4l2M2MPacketPayloadDetacher.detach(std::move(packet));
+                 if (!packet)
+                     qCWarning(qLcVideoFrameEncoder)
+                             << "Failed to detach V4L2 M2M packet payload";
+diff --git a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegvideoframeencoder_p.h b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegvideoframeencoder_p.h
+index 0bfc2bd..f2918ce 100644
+--- a/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegvideoframeencoder_p.h
++++ b/src/plugins/multimedia/ffmpeg/recordingengine/qffmpegvideoframeencoder_p.h
+@@ -15,6 +15,7 @@
+ //
+ 
+ #include <QtFFmpegMediaPluginImpl/private/qffmpeghwaccel_p.h>
++#include <QtFFmpegMediaPluginImpl/private/qffmpegpacketutils_p.h>
+ #include <QtMultimedia/private/qplatformmediarecorder_p.h>
+ #include <QtMultimedia/private/qmultimediautils_p.h>
+ 
+@@ -107,6 +108,8 @@ private:
+ 
+     qint64 m_lastPacketTime = AV_NOPTS_VALUE;
+     AVCodecContextUPtr m_codecContext;
++    // Declare after the codec context so the retained packet is released before codec teardown.
++    V4L2M2MPacketPayloadDetacher m_v4l2M2MPacketPayloadDetacher;
+     SwsContextUPtr m_scaleContext;
+     AVPixelFormat m_sourceFormat = AV_PIX_FMT_NONE;
+     AVPixelFormat m_sourceSWFormat = AV_PIX_FMT_NONE;
+diff --git a/tests/auto/unit/plugins/multimedia/ffmpeg/qffmpegvideoencoderutils/tst_qffmpegvideoencoderutils.cpp b/tests/auto/unit/plugins/multimedia/ffmpeg/qffmpegvideoencoderutils/tst_qffmpegvideoencoderutils.cpp
+index fc2e7d0..c517608 100644
+--- a/tests/auto/unit/plugins/multimedia/ffmpeg/qffmpegvideoencoderutils/tst_qffmpegvideoencoderutils.cpp
++++ b/tests/auto/unit/plugins/multimedia/ffmpeg/qffmpegvideoencoderutils/tst_qffmpegvideoencoderutils.cpp
+@@ -24,7 +24,8 @@ private slots:
+     void getScaleConversionType_returnsCorrectConversionType_basedOnScaling();
+     void getScaleConversionType_returnsCorrectConversionType_basedOnScaling_data();
+     void v4l2M2MEncoder_isOptInAndUsesNV12();
+-    void v4l2M2MPacketPayload_isDetached();
++    void v4l2M2MPacketPayload_isDeferredByOnePacket();
++    void v4l2M2MPacketPayload_copyFailureDoesNotLeak();
+ };
+ 
+ namespace {
+@@ -35,6 +36,51 @@ void markPacketPayloadReleased(void *opaque, uint8_t *data)
+     av_free(data);
+ }
+ 
++AVPacketUPtr makePacket(bool &payloadReleased, uint8_t firstPayloadByte, int64_t pts)
++{
++    constexpr int payloadSize = 8;
++    auto *data = static_cast<uint8_t *>(av_malloc(payloadSize + AV_INPUT_BUFFER_PADDING_SIZE));
++    if (!data)
++        return {};
++
++    for (int i = 0; i < payloadSize; ++i)
++        data[i] = static_cast<uint8_t>(firstPayloadByte + i);
++    std::memset(data + payloadSize, 0, AV_INPUT_BUFFER_PADDING_SIZE);
++
++    AVBufferRef *buffer = av_buffer_create(data, payloadSize, markPacketPayloadReleased,
++                                           &payloadReleased, 0);
++    if (!buffer) {
++        av_free(data);
++        return {};
++    }
++
++    AVPacketUPtr packet(av_packet_alloc());
++    if (!packet) {
++        av_buffer_unref(&buffer);
++        return {};
++    }
++
++    packet->buf = buffer;
++    packet->data = buffer->data;
++    packet->size = payloadSize;
++    packet->pts = pts;
++    packet->dts = pts - 34;
++    packet->duration = 40;
++    packet->stream_index = 2;
++    packet->flags = AV_PKT_FLAG_KEY;
++    packet->pos = 55;
++    packet->time_base = AVRational{ 1, 30000 };
++
++    auto *sideData = av_packet_new_side_data(packet.get(), AV_PKT_DATA_NEW_EXTRADATA, 3);
++    if (!sideData)
++        return {};
++    sideData[0] = 0xaa;
++    sideData[1] = 0xbb;
++    sideData[2] = 0xcc;
++
++    return packet;
++}
++
+ } // namespace
+ 
+ void tst_QFFmpegVideoEncoderUtils::v4l2M2MEncoder_isOptInAndUsesNV12()
+@@ -61,67 +107,85 @@ void tst_QFFmpegVideoEncoderUtils::v4l2M2MEncoder_isOptInAndUsesNV12()
+     qunsetenv("QT_FFMPEG_ENABLE_V4L2M2M_ENCODING");
+ }
+ 
+-void tst_QFFmpegVideoEncoderUtils::v4l2M2MPacketPayload_isDetached()
++void tst_QFFmpegVideoEncoderUtils::v4l2M2MPacketPayload_isDeferredByOnePacket()
+ {
+     constexpr int payloadSize = 8;
+-    auto *data = static_cast<uint8_t *>(av_malloc(payloadSize + AV_INPUT_BUFFER_PADDING_SIZE));
+-    QVERIFY(data);
+-
+-    for (int i = 0; i < payloadSize; ++i)
+-        data[i] = static_cast<uint8_t>(i + 1);
+-    std::memset(data + payloadSize, 0, AV_INPUT_BUFFER_PADDING_SIZE);
+-
+-    bool sourcePayloadReleased = false;
+-    AVBufferRef *buffer = av_buffer_create(data, payloadSize, markPacketPayloadReleased,
+-                                           &sourcePayloadReleased, 0);
+-    if (!buffer) {
+-        av_free(data);
+-        QFAIL("Could not allocate the source AVBufferRef");
++    bool firstPayloadReleased = false;
++    bool secondPayloadReleased = false;
++
++    {
++        V4L2M2MPacketPayloadDetacher detacher;
++
++        auto firstSource = makePacket(firstPayloadReleased, 1, 1234);
++        QVERIFY(firstSource);
++        const uint8_t *firstSourceData = firstSource->data;
++        auto firstDetached = detacher.detach(std::move(firstSource));
++
++        QVERIFY(firstDetached);
++        QVERIFY2(!firstPayloadReleased,
++                 "The first source packet must remain queued until a second packet arrives");
++        QVERIFY(firstDetached->data != firstSourceData);
++        QCOMPARE(firstDetached->size, payloadSize);
++        for (int i = 0; i < payloadSize; ++i)
++            QCOMPARE(firstDetached->data[i], static_cast<uint8_t>(i + 1));
++        QCOMPARE(firstDetached->pts, int64_t(1234));
++        QCOMPARE(firstDetached->dts, int64_t(1200));
++        QCOMPARE(firstDetached->duration, int64_t(40));
++        QCOMPARE(firstDetached->stream_index, 2);
++        QCOMPARE(firstDetached->flags, AV_PKT_FLAG_KEY);
++        QCOMPARE(firstDetached->pos, int64_t(55));
++        QCOMPARE(firstDetached->time_base.num, 1);
++        QCOMPARE(firstDetached->time_base.den, 30000);
++        QCOMPARE(firstDetached->side_data_elems, 1);
++        QCOMPARE(firstDetached->side_data[0].type, AV_PKT_DATA_NEW_EXTRADATA);
++        QCOMPARE(firstDetached->side_data[0].size, size_t(3));
++        QCOMPARE(firstDetached->side_data[0].data[0], uint8_t(0xaa));
++        QCOMPARE(firstDetached->side_data[0].data[1], uint8_t(0xbb));
++        QCOMPARE(firstDetached->side_data[0].data[2], uint8_t(0xcc));
++
++        auto secondSource = makePacket(secondPayloadReleased, 0x11, 1274);
++        QVERIFY(secondSource);
++        const uint8_t *secondSourceData = secondSource->data;
++        auto secondDetached = detacher.detach(std::move(secondSource));
++
++        QVERIFY(secondDetached);
++        QVERIFY2(firstPayloadReleased,
++                 "Receiving the second packet must release exactly the first source packet");
++        QVERIFY2(!secondPayloadReleased,
++                 "The second source packet must remain queued until the next packet or teardown");
++        QVERIFY(secondDetached->data != secondSourceData);
++        QCOMPARE(secondDetached->size, payloadSize);
++        for (int i = 0; i < payloadSize; ++i)
++            QCOMPARE(secondDetached->data[i], static_cast<uint8_t>(0x11 + i));
+     }
+ 
+-    AVPacketUPtr source(av_packet_alloc());
+-    QVERIFY(source);
+-    source->buf = buffer;
+-    source->data = buffer->data;
+-    source->size = payloadSize;
+-    source->pts = 1234;
+-    source->dts = 1200;
+-    source->duration = 40;
+-    source->stream_index = 2;
+-    source->flags = AV_PKT_FLAG_KEY;
+-    source->pos = 55;
+-    source->time_base = AVRational{ 1, 30000 };
+-
+-    auto *sideData = av_packet_new_side_data(source.get(), AV_PKT_DATA_NEW_EXTRADATA, 3);
+-    QVERIFY(sideData);
+-    sideData[0] = 0xaa;
+-    sideData[1] = 0xbb;
+-    sideData[2] = 0xcc;
++    QVERIFY2(secondPayloadReleased, "Destroying the detacher must release the final source packet");
++}
+ 
+-    const uint8_t *sourceData = source->data;
+-    auto detached = detachAVPacketPayload(std::move(source));
++void tst_QFFmpegVideoEncoderUtils::v4l2M2MPacketPayload_copyFailureDoesNotLeak()
++{
++    bool retainedPayloadReleased = false;
++    bool invalidPayloadReleased = false;
++
++    {
++        V4L2M2MPacketPayloadDetacher detacher;
++        auto retainedSource = makePacket(retainedPayloadReleased, 1, 1234);
++        QVERIFY(retainedSource);
++        QVERIFY(detacher.detach(std::move(retainedSource)));
++        QVERIFY(!retainedPayloadReleased);
++
++        auto invalidSource = makePacket(invalidPayloadReleased, 0x21, 1274);
++        QVERIFY(invalidSource);
++        invalidSource->size = -1;
++
++        QVERIFY(!detacher.detach(std::move(invalidSource)));
++        QVERIFY2(invalidPayloadReleased, "A packet that cannot be copied must be released");
++        QVERIFY2(!retainedPayloadReleased,
++                 "A failed copy must not prematurely release the previously retained packet");
++    }
+ 
+-    QVERIFY(detached);
+-    QVERIFY2(sourcePayloadReleased,
+-             "The source AVBufferRef is still retained after packet detachment");
+-    QVERIFY(detached->data != sourceData);
+-    QCOMPARE(detached->size, payloadSize);
+-    for (int i = 0; i < payloadSize; ++i)
+-        QCOMPARE(detached->data[i], static_cast<uint8_t>(i + 1));
+-    QCOMPARE(detached->pts, int64_t(1234));
+-    QCOMPARE(detached->dts, int64_t(1200));
+-    QCOMPARE(detached->duration, int64_t(40));
+-    QCOMPARE(detached->stream_index, 2);
+-    QCOMPARE(detached->flags, AV_PKT_FLAG_KEY);
+-    QCOMPARE(detached->pos, int64_t(55));
+-    QCOMPARE(detached->time_base.num, 1);
+-    QCOMPARE(detached->time_base.den, 30000);
+-    QCOMPARE(detached->side_data_elems, 1);
+-    QCOMPARE(detached->side_data[0].type, AV_PKT_DATA_NEW_EXTRADATA);
+-    QCOMPARE(detached->side_data[0].size, size_t(3));
+-    QCOMPARE(detached->side_data[0].data[0], uint8_t(0xaa));
+-    QCOMPARE(detached->side_data[0].data[1], uint8_t(0xbb));
+-    QCOMPARE(detached->side_data[0].data[2], uint8_t(0xcc));
++    QVERIFY2(retainedPayloadReleased,
++             "Destroying the detacher after a copy failure must release its retained packet");
+ }
+ 
+ void tst_QFFmpegVideoEncoderUtils::getScaleConversionType_returnsCorrectConversionType_basedOnScaling_data()
