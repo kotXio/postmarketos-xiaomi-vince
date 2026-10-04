@@ -1,6 +1,6 @@
 # Device status
 
-Last updated: 2026-09-30
+Last updated: 2026-10-04
 
 Reference device: Xiaomi Redmi 5 Plus (`vince`), `aarch64`, postmarketOS `v26.06`,
 Plasma Mobile, Linux `7.0.9-msm8953`, cumulative kernel package
@@ -64,6 +64,14 @@ that the same package will work on another release or package baseline.
 This application was tested with kernel `r17`, separately from the public
 `r16` reference above. It uses USB/libusb, not the built-in FM radio or the
 kernel DVB interface. See [SDR++ setup](fixes/sdrpp.md).
+
+## Optional Plasma widget
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Battery home-screen widget | Working | Shows voltage, charging/discharging current, battery temperature and a charge-level icon. Readings refresh every five seconds and pause when the screen is off or locked. |
+
+See the [widget source and setup guide](widgets/vince-battery/README.md).
 
 ## Second-handset LTR579 variant
 

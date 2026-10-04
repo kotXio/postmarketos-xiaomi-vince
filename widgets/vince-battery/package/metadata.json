@@ -1,0 +1,17 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Id": "org.kostik.vince.batterytelemetry",
+        "Name": "Vince Battery",
+        "Name[ru]": "Аккумулятор Vince",
+        "Description": "Battery voltage, charging/discharging current and temperature",
+        "Description[ru]": "Напряжение, ток зарядки/разрядки и температура аккумулятора",
+        "Icon": "battery",
+        "Version": "1.2",
+        "License": "MIT",
+        "Category": "System Information",
+        "Authors": [{ "Name": "Kostiantyn Andriiuk", "Email": "konstantin@andriyuk.com" }]
+    },
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-Provides": ["org.kde.plasma.systemmonitor"]
+}

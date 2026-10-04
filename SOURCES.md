@@ -20,6 +20,16 @@ The kernel series applies to the pinned Linux fork. The pmaports series is a
 set of direct diffs against the pinned official recipes and device files; its
 new Vince-only aports are project-authored.
 
+## Plasma Mobile battery widget
+
+[Plasma widget setup guide](https://develop.kde.org/docs/plasma/widget/setup/)
+and [Plasma 6 porting guide](https://develop.kde.org/docs/plasma/widget/porting_kf6/).
+The [Command Output widget](https://github.com/Zren/plasma-applet-commandoutput)
+was a reference for Plasma5Support's executable data engine.
+Linux's [power-supply interface documentation](https://docs.kernel.org/power/power_supply_class.html)
+was used for sysfs units. The display-off behaviour was checked against
+[Plasma Mobile 6.6.6's DPMS utility](https://invent.kde.org/plasma/plasma-mobile/-/blob/v6.6.6/components/dpmsplugin/dpmsutil.cpp).
+
 ## TAS2557 speaker and UCM
 
 Kernel patches `0001`-`0004` are the immutable commits from

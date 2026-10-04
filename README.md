@@ -18,6 +18,7 @@ the work safely.
 - [Fixes and experiments](fixes/README.md)
 - [Package sources](packages/README.md)
 - [Device configuration](config/README.md)
+- [Plasma widgets](widgets/README.md)
 - [Kernel and pmaports patch series](patches/README.md)
 - [Pinned source revisions and provenance](SOURCES.md)
 
@@ -37,6 +38,8 @@ the work safely.
 - Built-in infrared transmission through rc-core and fixed-rate SPI sampling.
 - Native FM radio with full-band scanning, saved stations and stereo audio
   through wired headphones or the TAS2557 speaker.
+- A compact [Plasma Mobile battery widget](widgets/vince-battery/README.md)
+  showing live voltage, signed current and battery temperature.
 - [SDR++ with a USB RTL-SDR receiver](fixes/sdrpp.md): live spectrum,
   waterfall, Wayland touch controls and radio audio.
 - Suspend-to-idle and power-button wake with working display and touch;

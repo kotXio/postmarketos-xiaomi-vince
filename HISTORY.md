@@ -3,6 +3,13 @@
 This chronology lists changes and investigations verified on the physical
 handset. Reproduction details are linked where available.
 
+## 2026-10-04 — Battery details on the home screen
+
+- Added a compact, transparent Plasma Mobile widget showing battery voltage,
+  signed charging/discharging current and battery temperature.
+- Readings refresh every five seconds and pause when the screen is off or locked.
+- Source and setup are in the [Vince Battery guide](widgets/vince-battery/README.md).
+
 ## 2026-09-24 — Android apps with Waydroid
 
 - Made Android 13 usable inside postmarketOS with native Adreno graphics,
