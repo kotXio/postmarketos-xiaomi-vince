@@ -1,0 +1,25 @@
+# Contributor: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+# Packages the exact previously qualified aarch64/musl Gallium payload.
+# Build the library with build-mesa.sh before changing its checksum.
+pkgname=vince-angelfish-mesa-msaa
+pkgver=26.1.6
+pkgrel=0
+pkgdesc="Browser-private Freedreno MSAA GMEM correction for tested Vince stack"
+url="https://www.mesa3d.org"
+arch="aarch64"
+license="MIT AND SGI-B-2.0 AND BSL-1.0"
+depends="mesa-dri-gallium=26.1.6-r0 qt6-qtwebengine=6.11.1-r10 angelfish=26.04.2-r0"
+options="!strip !check !tracedeps"
+source="libgallium-26.1.6.so browser-launch.sh mesa-license.rst"
+
+package() {
+    local prefix="$pkgdir/usr/lib/vince-angelfish-mesa-msaa"
+    install -Dm755 "$srcdir/libgallium-26.1.6.so" "$prefix/lib/libgallium-26.1.6.so"
+    install -Dm755 "$srcdir/browser-launch.sh" "$prefix/angelfish"
+    install -Dm644 "$srcdir/mesa-license.rst" "$pkgdir/usr/share/licenses/$pkgname/mesa-license.rst"
+}
+sha512sums="
+6d8cb9cb9388b9a03efba8ff7de8d98cb05e6506908764b5b474855f20cf811d85da8bf45835f7e1b825794fb93fbdaf1aa68b6915bb8a2b7790f97bc6ae2836  libgallium-26.1.6.so
+fff4571fc5553e4830708e316bb67e8e362ab3e46cf007784547be8afdddd4db5359f1693499db2c76ed6c85236335b56d055361acaf80c6f2c36877dc7907ac  browser-launch.sh
+79c2a7b34d09994d90be07d6a974baab05ed29f6651a64e9e9825c33c7bb8da576162f38a2a4405df498af756119496030befba5a331a590ca07eb1b6c79f8ce  mesa-license.rst
+"

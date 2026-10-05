@@ -27,8 +27,14 @@ and is not inferred from Venus activity alone.
 
 ## Required Angelfish launcher
 
-The hardware decoder feature is not enabled by the APK alone. Use the two
-required rendering-stability flags and add `AcceleratedVideoDecoder`:
+The hardware decoder feature is enabled with `AcceleratedVideoDecoder`.
+With the [corrected Mesa library](angelfish-rendering.md), use its launcher:
+
+```text
+Exec=/usr/lib/vince-angelfish-mesa-msaa/angelfish %u
+```
+
+For the uncorrected system Mesa, retain the earlier rendering workaround:
 
 ```text
 Exec=/usr/bin/env QTWEBENGINE_CHROMIUM_FLAGS="--disable-gpu-rasterization --disable-webgl --enable-features=AcceleratedVideoDecoder" /usr/bin/angelfish %u

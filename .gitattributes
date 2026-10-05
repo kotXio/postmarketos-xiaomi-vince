@@ -2,3 +2,4 @@
 
 # Preserve the upstream licence texts verbatim.
 packages/sdrpp-vince/licenses/*.txt -whitespace
+packages/vince-angelfish-mesa-msaa/mesa-license.rst -whitespace conflict-marker-size=32

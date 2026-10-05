@@ -22,7 +22,9 @@ The public source is split by upstream target:
 - [`qtmultimedia/`](qtmultimedia/README.md): Venus H.264 encoding and
   PulseAudio capture fixes shared by Camera and KRecorder;
 - [`qtwebengine/`](qtwebengine/README.md): Qt WebEngine/Chromium stateful V4L2
-  hardware-video integration for Qualcomm Venus.
+  hardware-video integration for Qualcomm Venus;
+- [`mesa/`](mesa/README.md): Freedreno MSAA sizing correction for Angelfish
+  GPU rasterization and WebGL.
 
 Follow each directory's selected series and base recorded in
 [`SOURCES.md`](../SOURCES.md). The series represents the physically tested

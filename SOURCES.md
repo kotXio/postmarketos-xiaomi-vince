@@ -394,6 +394,29 @@ revision did not provide an explicit licence grant.
 
 ## Angelfish and hardware video
 
+### Freedreno MSAA fix
+
+The [Mesa correction](patches/mesa/README.md) is by
+Kostiantyn Andriiuk <konstantin@andriyuk.com>. It changes two depth/stencil
+assignments in Mesa `26.1.6`'s existing MIT-licensed Freedreno driver, whose
+copyright and original authorship belong to Rob Clark. The source input is
+[Mesa 26.1.6](https://mesa.freedesktop.org/archive/mesa-26.1.6.tar.xz), SHA-256
+`5296b88a0f1e012e2cb9ada150a2bbadf728ca81e5a4fb2ab43c83a4d2158606`.
+The [inspected upstream GMEM code](https://chromium.googlesource.com/external/gitlab.freedesktop.org/mesa/mesa/+/656e30934fe7e2e5944d6ebd9c0779189ded0ffe/src/gallium/drivers/freedreno/freedreno_gmem.c)
+and Mesa's [Freedreno documentation](https://docs.mesa3d.org/drivers/freedreno.html)
+were references for the diagnosis; the correction was developed from handset
+reproducers rather than copied from an external fix.
+
+The tested build retains Alpine's unchanged
+[Rockchip EBC patch](patches/mesa/23575.patch) by Diederik de Haas,
+[Mesa MR 23575](https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/23575).
+The [retained Alpine recipe](packages/vince-angelfish-mesa-msaa/mesa-Alpine-26.1.6-r0-APKBUILD)
+preserves its contributor and maintainer notices. The local package/build
+recipe and browser launcher are by Kostiantyn Andriiuk; Mesa's component
+licenses accompany the [package source](packages/vince-angelfish-mesa-msaa/README.md).
+
+### Qt WebEngine hardware video
+
 The Angelfish launcher workaround is project-authored from controlled A/B
 testing, not copied configuration. The interpretation used official
 [Qt WebEngine](https://doc.qt.io/qt-6/qtwebengine-features.html),

@@ -1,0 +1,29 @@
+From: Kostiantyn Andriiuk <konstantin@andriyuk.com>
+Date: Sun, 4 Oct 2026 15:48:00 +0300
+Subject: [PATCH] freedreno: count depth/stencil MSAA samples once
+
+Resource layout.cpp already includes the sample count. Multiplying it by
+framebuffer samples again overestimates depth and separate-stencil storage.
+On Adreno 506, the resulting minimum GMEM tile can be impossible to fit,
+leaving the tile-size calculation spinning during GPU rasterization or WebGL.
+
+Use the resource's existing sample-inclusive size for both assignments.
+
+The change extends Mesa's MIT-licensed Freedreno driver.
+---
+diff --git a/src/gallium/drivers/freedreno/freedreno_gmem.c b/src/gallium/drivers/freedreno/freedreno_gmem.c
+--- a/src/gallium/drivers/freedreno/freedreno_gmem.c
++++ b/src/gallium/drivers/freedreno/freedreno_gmem.c
+@@ -462,9 +462,10 @@
+ 
+    if (has_zs || assume_zs) {
+       struct fd_resource *rsc = fd_resource(pfb->zsbuf.texture);
+-      key->zsbuf_cpp[0] = rsc->layout.cpp * pfb->samples;
++      /* Resource layout.cpp already includes the MSAA sample count. */
++      key->zsbuf_cpp[0] = rsc->layout.cpp;
+       if (rsc->stencil)
+-         key->zsbuf_cpp[1] = rsc->stencil->layout.cpp * pfb->samples;
++         key->zsbuf_cpp[1] = rsc->stencil->layout.cpp;
+ 
+       /* If we clear z or s but not both, and we are using z24s8 (ie.
+        * !separate_stencil) then we need to restore the other, even if

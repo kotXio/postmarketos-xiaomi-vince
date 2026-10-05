@@ -46,10 +46,10 @@ the work safely.
   overnight use showed normal battery behaviour.
 - LTR579 ambient light plus a polled raw proximity channel on a separately
   identified second handset; automatic binding and passive far readings pass.
-- Stable Angelfish launcher workaround that keeps GPU composition and Canvas
-  while disabling the two unstable Chromium paths.
+- [Angelfish GPU rasterization and WebGL1/2](fixes/angelfish-rendering.md)
+  restored by a Mesa/Freedreno MSAA correction tested on two Vince phones.
 - Hardware video decoding in normal Angelfish through Qualcomm Venus, using a
-  patched Qt WebEngine `6.11.1-r10` and the existing safe rendering flags.
+  patched Qt WebEngine `6.11.1-r10`.
 
 ## Known gaps
 
@@ -119,13 +119,20 @@ published source recipe. It requires the public autofocus
 Release linked above. It adds continuous torch control only; photo flash
 remains deferred.
 
-The experimental browser hardware-video update is available as
+The Angelfish GPU/WebGL update is available as
+[`v2026.10.05-angelfish`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.10.05-angelfish).
+It includes the corrected Mesa library, Qt WebEngine `r10`, the original Qt
+`r3` for rollback and checksums. Follow the
+[Angelfish setup guide](fixes/angelfish-rendering.md) to enable GPU
+rasterization, WebGL and hardware H.264 video.
+
+The earlier experimental browser hardware-video update is available as
 [`v2026.09.05-webengine`](https://github.com/kotXio/postmarketos-xiaomi-vince/releases/tag/v2026.09.05-webengine).
 It contains one cumulative Qt WebEngine `6.11.1-r10` APK. With the documented
 Angelfish launcher flag, the browser uses the Qualcomm Venus stateful V4L2
-decoder while retaining the tested WebGL and GPU-rasterization stability
-workaround. Fixed H.264 and normal YouTube playback work;
-extended fullscreen stability is not yet claimed.
+decoder. The [Mesa correction](fixes/angelfish-rendering.md) now allows GPU
+rasterization and WebGL as well. Extended fullscreen video stability is not
+yet claimed.
 
 Read the compatibility and public package order in
 [`packages/README.md`](packages/README.md) before using the APKs. Do not install

@@ -1,6 +1,6 @@
 # Device status
 
-Last updated: 2026-10-04
+Last updated: 2026-10-05
 
 Reference device: Xiaomi Redmi 5 Plus (`vince`), `aarch64`, postmarketOS `v26.06`,
 Plasma Mobile, Linux `7.0.9-msm8953`, cumulative kernel package
@@ -32,7 +32,7 @@ that the same package will work on another release or package baseline.
 | Front selfie fill light | Working with limitation | Binary control is available through `white:torch-1`, and the light turns off automatically during suspend. Current, hardware cutoff and camera synchronization are unknown. |
 | Video codec Venus | Working with limitation | Angelfish uses Venus for hardware video with Qt WebEngine `6.11.1-r10`. YouTube is smooth and used about half as much CPU as software decoding. Two firmware errors recovered automatically during a longer fullscreen test without a visible playback problem. |
 | Plasma Camera video | Partial | Rear recording closes safely, but the public camera stack produced low frame rate, timestamp defects and no audio. Direct camera capture produces good results; the limitation is in Plasma Camera integration. |
-| Angelfish | Working with workaround | Hardware video works with Qt WebEngine `r10` and `AcceleratedVideoDecoder`; GPU rasterization and WebGL remain disabled for stability while GPU composition and Canvas stay enabled. |
+| Angelfish | Working | The Mesa/Freedreno correction restores GPU rasterization and WebGL1/2. Hardware H.264 decoding works with Qt WebEngine `r10`. |
 | Motion sensors / auto-rotation | Working | BMI120 acceleration, gyroscope readings and automatic rotation work. |
 | Ambient light sensor | Working | Live illumination readings are available; this does not establish proximity support. |
 | Automatic brightness | Working | Plasma Mobile adjusted the display brightness in response to physical light changes and returned to the previous level. |

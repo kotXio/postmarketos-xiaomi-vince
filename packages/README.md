@@ -6,6 +6,7 @@ for the Vince configuration:
 - [`linux-postmarketos-qcom-msm8953-r16`](linux-postmarketos-qcom-msm8953-r16/README.md);
 - [`postmarketos-vince-fm-radio`](postmarketos-vince-fm-radio/README.md);
 - [`sdrpp-vince`](sdrpp-vince/README.md);
+- [`vince-angelfish-mesa-msaa`](vince-angelfish-mesa-msaa/README.md);
 - [`alsa-ucm-conf-xiaomi-vince-tas2557`](alsa-ucm-conf-xiaomi-vince-tas2557/README.md);
 - [`firmware-xiaomi-vince-tas2557-local`](firmware-xiaomi-vince-tas2557-local/README.md);
 - [`libcamera-ipa-ov12a10`](libcamera-ipa-ov12a10/README.md);
@@ -281,8 +282,9 @@ Exec=/usr/bin/env QTWEBENGINE_CHROMIUM_FLAGS="--disable-gpu-rasterization --disa
 Fully stop the previous Angelfish process and start it again from the Plasma
 Mobile icon. A normal playback check should show the dynamically resolved
 `qcom-venus-decoder` runtime status as `active`; it must return to `suspended`
-after playback stops. Keep the two rendering-stability flags: hardware video
-does not replace them.
+after playback stops. Those two rendering flags are the fallback for the
+uncorrected system Mesa. With the [Mesa MSAA correction](../fixes/angelfish-rendering.md),
+GPU rasterization and WebGL can remain enabled.
 
 To disable hardware video, remove only
 `--enable-features=AcceleratedVideoDecoder` from the launcher while retaining

@@ -17,6 +17,6 @@ each hardware or software area.
 - [Plasma Camera: hardware-encoded video with Mic2 sound](plasma-camera-video.md)
 - [KRecorder: recording from the normal icon](krecorder.md)
 - [PMI8950 dual-colour rear torch](pmi8950-torch.md)
-- [Angelfish rendering workaround](angelfish-rendering.md)
+- [Angelfish GPU rasterization and WebGL](angelfish-rendering.md)
 - [Qt WebEngine hardware video through Qualcomm Venus](hardware-video.md)
 - [Android apps with Waydroid: native graphics and integration workarounds](waydroid.md)

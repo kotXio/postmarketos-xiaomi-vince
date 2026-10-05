@@ -3,6 +3,14 @@
 This chronology lists changes and investigations verified on the physical
 handset. Reproduction details are linked where available.
 
+## 2026-10-05 — Angelfish GPU rasterization and WebGL
+
+- Fixed the Mesa/Freedreno MSAA sizing bug behind Angelfish scrolling and
+  WebGL hangs. GPU rasterization and WebGL1/2 now work on two Vince phones.
+- Removed the need for the old disabling flags while keeping Venus hardware
+  video through the existing Qt WebEngine `r10` build.
+- Added the [source correction and setup guide](fixes/angelfish-rendering.md).
+
 ## 2026-10-04 — Battery details on the home screen
 
 - Added a compact, transparent Plasma Mobile widget showing battery voltage,
